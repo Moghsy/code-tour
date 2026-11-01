@@ -1,0 +1,40 @@
+# code-walkthrough.nvim
+
+Code walkthroughs for Neovim 0.11+ with Claude Code and Codex. A bordered inline box appears directly above the highlighted source range. Virtual lines leave the file unchanged, and long explanations and answers use bounded pages. No Lua dependencies. Uses your installed and authenticated `claude` or `codex` CLI.
+
+Run `python3 install/install.py` to install into your Neovim configuration and add the skill to Claude Code and Codex discovery directories. Existing files are backed up when replaced. Restart Neovim after installation. The default provider is Claude; change the installed plugin spec's `opts.provider` to `"codex"` for a persistent default.
+
+| Key | Action |
+| --- | --- |
+| `<leader>ah` | Toggle explanations / load `.nvim/walkthrough.json` |
+| `<leader>aj`, `<leader>ak` | Next / previous explanation box |
+| `<leader>an`, `<leader>ap` | Next / previous snippet |
+| `<leader>ar` | Ask about the highlighted range |
+| `<leader>aq` | Stop walkthrough and cancel pending work |
+| `<leader>a]`, `<leader>a[` | Next / previous explanation page |
+
+`:WalkthroughGenerate explain my changes` generates a walkthrough from the current buffer and `git diff HEAD` (staged and unstaged tracked changes). The buffer should be saved first: ranges are validated against loaded files. New files are included when they are the current buffer. For a complete multi-file walkthrough, ask either agent to use its `code-walkthrough` skill; it reads the relevant files and writes the watched JSON file. For example: “Use code-walkthrough to walk me through the changes in Neovim.”
+
+`<leader>ar` opens a centered, rounded multiline Markdown composer matching the Herdr `<leader>ac` prompt: Ctrl-S asks, Ctrl-B saves a draft, Ctrl-F asks and focuses the code with its inline explanation, Escape enters normal mode, and q closes from normal mode. The title identifies the provider and selected source range. Answers appear as paginated inline boxes above the code.
+
+`:WalkthroughProvider codex` and `:WalkthroughProvider claude` switch providers for new requests. `:WalkthroughAsk <question>` also accepts a question directly. `:WalkthroughCancel` cancels a pending request. `<leader>aq` / `:WalkthroughStop` also close the UI and prevent ordinary file refreshes from reopening it; `<leader>ah` or a new agent launch resumes it. Requests time out after three minutes by default. Provider errors are shown through Neovim notifications. CLI authentication and network access are required for live responses.
+
+Inside Herdr, the companion skill lists available foreground Neovim instances across running sessions and asks which editor to use the first time in an agent conversation. It remembers that choice, verifies the editor process is still the same on later launches, and asks again only if the choice becomes invalid or the user requests a change. Starting a walkthrough automatically focuses the chosen tab. Targeted publications include the Herdr session, pane and process identity, so other Neovim instances ignore them. The helper lives in `skills/code-walkthrough/scripts/herdr_walkthrough.py`; its `list`, `selected`, `select <id>` and `start --project <root> --source <json>` commands implement the skill workflow. The cache uses `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`, or an explicit `--agent-session <unique-conversation-key>`. This helper requires a local Herdr installation and shared local project files; it does not target SSH machines.
+
+`:WalkthroughLoad [path]` loads a walkthrough. The expected location is `<project>/.nvim/walkthrough.json`; custom paths must also be in a directory one level below the project root. The file format and authoring instructions are in [the skill](skills/code-walkthrough/SKILL.md). The watcher opens a newly authored walkthrough and refreshes it when replaced. Overview boxes highlight the entire snippet; subsection boxes highlight their own range. Navigation stops at the first and last entry.
+
+Questions include the current range, overview, current explanation and previous snippet questions. Answers become additional boxes on that snippet and use the same pagination. Answers live in memory until the walkthrough is reloaded or Neovim exits. Editing source displays a warning to regenerate because saved ranges may become stale. Toggling explanations off clears the virtual box and highlights and leaves source buffers open. Subsections must be at most 25 lines (prefer 8–15); the overall snippet overview can cover a longer range. Both the plugin validator and Herdr publisher enforce the subsection limit.
+
+Claude requests run with tools disabled. Codex requests use its read-only sandbox and ephemeral JSON event output, following the [non-interactive CLI interface](https://developers.openai.com/codex/noninteractive). The plugin sends prompts via stdin without shell interpolation. It never bypasses CLI permissions. Code and diff context are sent to the selected provider when you generate or ask a question.
+
+Manual setup with any plugin manager: add this directory to `runtimepath`, then call `require("code-walkthrough").setup({ provider = "claude", page_lines = 10, max_section_lines = 25, timeout = 180000, poll_ms = 1500 })`.
+
+Run checks from the repository root:
+
+```sh
+nvim --clean --headless -l tools/code-walkthrough.nvim/tests/run.lua
+PYTHONDONTWRITEBYTECODE=1 python3 tools/code-walkthrough.nvim/tests/test_herdr.py
+python3 tools/code-walkthrough.nvim/install/install.py --home /tmp/walkthrough-install-test
+```
+
+Tests use provider fixtures and fake local processes; they make no paid model calls.

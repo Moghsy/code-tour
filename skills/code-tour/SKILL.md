@@ -5,6 +5,35 @@ description: Create interactive Neovim code tours and answer code-tour question,
 
 Use the code-tour CLI to present code, review changes, or answer an existing tour request. Run `python3 <skill-dir>/scripts/code-tour.py` (called `code-tour` below). It sends stops directly to Neovim over RPC and focuses its Herdr pane. It does not edit source.
 
+### Save, find and reopen tours
+
+Use the `saved` command group only for explicit saved-library requests. Never silently reuse a saved tour for a fresh explanation, or save because a tour was generated, opened or refreshed.
+
+```sh
+code-tour saved save --title 'Authentication'
+code-tour saved list --limit 5
+code-tour saved open TOUR_ID --pane P
+code-tour saved save --overwrite TOUR_ID --revision REVISION --pane P
+```
+
+An ordinary save always creates a new ID. Listing requires a positive limit and returns `{tours, issues}` directly from local metadata without opening source, discovering editors or invoking a model. Present ID, title, save time and repository labels so the user can identify a tour; duplicate titles are allowed. Surface unreadable or unsupported entry diagnostics. Metadata does not claim the explanation still matches current code. Opening returns ID, revision, counts and unresolved issues without waiting for regeneration. Save returns ID, revision, save times, library path and omitted unfinished branches.
+
+Overwrite only an unambiguously identified ID explicitly requested by the user. Preserve the revision supplied by listing/opening. The editor can also use its retained revision for that same opened ID when `--revision` is omitted. Report revision conflicts; never fetch a newer revision and silently retry overwrite. Report busy/stale locks for explicit inspection, without deleting or stealing them automatically.
+
+Records are profile-specific under `stdpath("data")/code-tour/tours`; the CLI uses `XDG_DATA_HOME` (default `~/.local/share`) and `NVIM_APPNAME` (default `nvim`). A profile/path mismatch must be resolved by using the matching CLI environment/editor. Do not copy or migrate records automatically. Existing `--pane`, origin discovery and editor ambiguity choices apply to save/open. An open binds to the current originating agent, not a historical conversation.
+
+Reassociate missing/moved roots using repeatable `--repo ID /absolute/current/root`, and renamed files with `--map-file REPO_ID old/relative/path new/relative/path` on `saved open`. Ask for missing mappings only when available context cannot resolve them. Do not guess replacement source, search the entire repository automatically or waive duplicate-match errors. Keep independently available boxes accessible; a failed preflight leaves the current tour intact. Mappings and refreshed notes remain live until an explicit save.
+
+Only prepared overviews, parts and nested callees/navigation are retained. Q&A, examples, annotations, lazy descriptors and historical review inputs are excluded. Notes without host generation-time source evidence, including standalone initial tours and review prose, are saved as unverified without regeneration during save. On explicit open, unchanged verified boxes are reused, and unverified authored boxes whose saved code is unchanged are reused as-is (they stay unverified). Changed boxes, review prose and notes withheld at save time regenerate automatically in batched requests. Missing parsers and partial-token selections withhold saved syntax reuse. Matching selected syntax does not certify unchanged dependencies or surrounding behavior.
+
+### Respond to saved regeneration
+
+`[code-tour saved regeneration]` has a stricter contract than ordinary explanation/refinement requests. Explain only the supplied captured CURRENT code and exact byte range, in its repository context. Never reuse invalid old prose or recreate historical comparison claims. Return a JSON list with exactly ONE stop containing `file`, `start`, `end`, `note` (optional `title`). Copy the requested file and inclusive line coverage exactly; describe only the supplied bytes when other statements share those lines. Keep overview prose concise and part prose detailed.
+
+`[code-tour saved regeneration batch]` carries several boxes under the same contract. Explain each `## Box: ID` independently from its own captured code, and return ONE JSON list with exactly one stop per box, each adding `box` (the Box ID) to `file`, `start`, `end`, `note` (optional `title`). Deliver the whole list once through the supplied command. Each stop is validated separately: a wrong range, missing or duplicate `box`, or a stale source fails only that box, and omitted boxes are reported as failed. Do not split a batch into several fills; the request completes on the first fill.
+
+Omit parts, calls, examples, values, review data and generation evidence. Deliver through the exact supplied `--fill ID --pane P --tour TOKEN` command, with no placement or review flags. This replaces only the requested box and preserves siblings and navigation. Do not send a new `show` payload or save the result. The editor validates source freshness and rejects late/cancelled replies. A meaningful source change requires explicit retry using explain-current-box; do not automatically retry or manufacture a replacement request. Failures and timeouts let unrelated queued targets continue.
+
 ### Author a tour
 
 Read the current files and relevant diff. Start an example when the user asks for one, and continue an already requested example through connected snippets, refinements and callee expansions without requiring the user to ask again. For a new tour without an example request, omit `example`/`examples` and all line values. Send a JSON list on stdin, or use `--file <prepared-json>`:

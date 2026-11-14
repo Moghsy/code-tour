@@ -7,6 +7,9 @@ local conversation = require("code-tour.conversation")
 local badge = require("code-tour.call-badge")
 local definition = require("code-tour.definition")
 local requests = require("code-tour.requests")
+local saved = require("code-tour.saved")
+local source_engine = require("code-tour.source")
+local library = require("code-tour.library")
 local ns = vim.api.nvim_create_namespace("CodeTourSource")
 local s =
   { stops = {}, stop = 1, box = 1, page = 1, note_page = 1, visible = false, pending = {}, questions = {}, opts = {} }
@@ -69,6 +72,7 @@ local function enter_call(call, stop, box)
   while #s.frames > 0 and s.frames[#s.frames].call ~= stop do table.remove(s.frames) end
   s.frames[#s.frames + 1] = { call = call, stop = stop, box = box }
   s.stop, s.box = locate(call)
+  s.box = stops.first_box(call)
   clear_intent()
 end
 
@@ -116,11 +120,17 @@ local function decorate(stop, box, layout)
   end
   for line = stop.start, math.min(stop["end"], count) do
     local focused = line >= box.start and line <= box["end"]
-    local group = focused and "CodeTourFocus" or "CodeTourStop"
+    local group = focused and not box.byte_range and "CodeTourFocus" or "CodeTourStop"
     if (stop.added or {})[line] then
       group = focused and "CodeTourDiffAddFocus" or "CodeTourDiffAdd"
     end
     vim.api.nvim_buf_set_extmark(stop.buf, ns, line - 1, 0, { line_hl_group = group, priority = 110 })
+  end
+  if box.byte_range and not box._unlocated then
+    local r = box.byte_range
+    vim.api.nvim_buf_set_extmark(stop.buf, ns, r.start[1], r.start[2], {
+      end_row = r["end"][1], end_col = r["end"][2], hl_group = "CodeTourFocus", priority = 115,
+    })
   end
   for k, part in ipairs(stop.parts) do
     for line = part.start, math.min(part["end"], count) do
@@ -176,7 +186,13 @@ local function decorate(stop, box, layout)
 end
 
 render = function(jump)
+  saved.revalidate(s)
   local stop, box = current()
+  if box and box._unlocated then
+    clear()
+    view.close()
+    return
+  end
   if not stop or not s.visible or not s.win or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
@@ -242,20 +258,10 @@ function M.review(base)
   return { review = true, base = base }
 end
 
-function M.show(input, opts)
-  opts = opts or {}
-  local append = opts.append and #s.stops > 0
-  local root = vim.fs.normalize(opts.root or vim.fn.getcwd())
-  if append then
-    root = s.root
-  end
-  local review = opts.review
-  if review == nil and append then
-    review = s.review
-  end
-  local base = opts.base or (append and s.base or nil)
-  local data = prepare(input, root, review, base)
+local function activate(data, opts, root, append, review, base)
   if not append then
+    saved.cancel(s)
+    s.saved = nil
     M.hide()
     composer.clear()
     s.arrival = nil
@@ -275,9 +281,27 @@ function M.show(input, opts)
   window()
   vim.api.nvim_set_current_tabpage(s.tab)
   vim.api.nvim_set_current_win(s.win)
-  s.stop, s.box = first, 1
+  s.stop, s.box = first, stops.first_box(s.stops[first])
   render(true)
   return { shown = #stops.roots(data), stop = s.stop, pane = vim.env.HERDR_PANE_ID }
+end
+
+function M.show(input, opts)
+  opts = opts or {}
+  local append = opts.append and #s.stops > 0
+  local root = vim.fs.normalize(opts.root or vim.fn.getcwd())
+  if append then
+    root = s.root
+  end
+  local review = opts.review
+  if review == nil and append then
+    review = s.review
+  end
+  local base = opts.base or (append and s.base or nil)
+  local data = prepare(input, root, review, base)
+  local result = activate(data, opts, root, append, review, base)
+  saved.sync(s)
+  return result
 end
 
 function M.hide()
@@ -332,7 +356,7 @@ function M.next_snippet(delta)
   end
   if #order == 0 then return end
   s.stop = order[math.max(1, math.min(#order, index + delta))]
-  s.box = 1
+  s.box = stops.first_box(s.stops[s.stop])
   s.frames = {}
   reset_pages()
   s.visible = true
@@ -381,6 +405,7 @@ function M.page(delta)
   render(false)
 end
 function M.focus()
+  render(false)
   view.focus()
 end
 function M.list_snippets()
@@ -406,7 +431,7 @@ function M.list_snippets()
         if item.stop._parent_stop then
           M.expand_call(item.stop)
         else
-          s.stop, s.box, s.frames = i, 1, {}
+          s.stop, s.box, s.frames = i, stops.first_box(item.stop), {}
           reset_pages()
           M.recenter()
         end
@@ -430,21 +455,63 @@ local function command(action)
     .. " --tour "
     .. s.id
 end
-local function source(stop, first, last)
-  return stop.file
-    .. ":"
-    .. first
-    .. "-"
-    .. last
-    .. "\n```\n"
-    .. table.concat(vim.api.nvim_buf_get_lines(stop.buf, first - 1, last, false), "\n")
-    .. "\n```"
+function M.save_saved(opts)
+  opts = opts or {}
+  library.check_directory(opts.library)
+  assert(#s.stops > 0, "Open a tour before saving")
+  local revision = opts.revision
+  if opts.overwrite and not revision and s.saved and s.saved.record.id == opts.overwrite then
+    revision = s.saved.revision
+  end
+  assert(not opts.overwrite or revision, "Overwrite requires --revision or opening that same entry first")
+  local record, omitted = saved.export(s, opts)
+  if opts.overwrite then record.id = opts.overwrite end
+  local result = library.write(record, { overwrite = opts.overwrite, expected_revision = revision, library = opts.library })
+  result.omitted = omitted
+  if s.saved and s.saved.record.id == result.id then s.saved.revision = result.revision end
+  return result
 end
+
+function M.open_saved(id, opts)
+  opts = opts or {}
+  library.check_directory(opts.library)
+  local record, revision = library.read(id)
+  -- Preflight all mappings before touching the active tour or its queue.
+  local plan = saved.prepare(record, vim.tbl_extend("force", opts,
+    { reuse_unverified = not s.opts or s.opts.saved_reuse_unverified ~= false }))
+  plan.revision = revision
+  local root = plan.runtime[1].path
+  root = vim.fs.dirname(root)
+  activate(plan.runtime, opts, root, false, false, nil)
+  saved.start(s, plan, {
+    command = function(request) return command("fill " .. request) end,
+    send = function(prompt, callback) return conversation.send(s.origin, prompt, "stay", callback) end,
+    refresh = function()
+      saved.revalidate(s)
+      local active = current()
+      if active and s.win and vim.api.nvim_win_is_valid(s.win) and vim.api.nvim_win_get_buf(s.win) == active.buf then
+        render(false)
+      end
+    end,
+  })
+  render(false)
+  local counts = {}
+  local reused = 0
+  for _, entry in ipairs(plan.entries) do
+    counts[entry.status] = (counts[entry.status] or 0) + 1
+    if entry.reused then reused = reused + 1 end
+  end
+  return { id = id, title = record.title, revision = revision, library = library.directory(),
+    opened = #plan.runtime, counts = counts, reused_unverified = reused, issues = plan.issues }
+end
+
 function M.ask(question, action, selected)
   local stop, box = current()
   if not stop then
     return
   end
+  local _, ready = stops.note(box)
+  assert(ready, "Regenerate this explanation before asking a question")
   action = action or "stay"
   if not question or question == "" then
     local target_stop, target_box = stop, box
@@ -476,20 +543,11 @@ function M.ask(question, action, selected)
   if selected then
     first, last = math.max(stop.start, selected[1]), math.min(stop["end"], selected[2])
   end
-  local prompt = "[code-tour question]\nAnswer in this conversation; do not edit source.\nBox "
-    .. id
-    .. "\nNote:\n"
-    .. box.note
-    .. "\n"
-    .. source(stop, first, last)
-    .. "\nExample: "
-    .. vim.json.encode(stop.example or {})
-    .. "\nPrevious Q&A: "
-    .. vim.json.encode(box.thread)
-    .. "\nQuestion: "
-    .. question
-    .. "\nDeliver Markdown on stdin using:\n"
-    .. command("answer " .. id)
+  -- The originating agent built this tour and holds its notes, examples and
+  -- earlier Q&A, so only send what identifies the box and the new question.
+  local prompt = ("[code-tour question] Box %s · %s:%d-%d%s\nQuestion: %s\n"
+    .. "Answer in Markdown without editing source; deliver it on stdin using:\n%s")
+    :format(id, stop.file, first, last, selected and " (selected lines)" or "", question, command("answer " .. id))
   local turn = { question = question, box_id = id }
   box.thread[#box.thread + 1] = turn
   s.questions[id] = s.questions[id] or {}
@@ -609,6 +667,16 @@ function M.explain_range(selection, context, action)
 end
 
 function M.explain(selected, with_context)
+  local _, active_box = current()
+  local mode = vim.api.nvim_get_mode().mode
+  if not selected and not mode:match("^[vV\22]") and active_box and active_box._saved then
+    saved.guard(active_box._saved)
+    if active_box._saved.status ~= "ready" then
+      local id = saved.retry(s, active_box._saved.id)
+      render(false)
+      return id
+    end
+  end
   if not current() then
     notify("Open a tour before adding an explanation")
     return
@@ -898,6 +966,7 @@ end
 function M.fill(id, input, opts)
   opts = opts or {}
   local request = assert(s.pending[id], "Unknown or completed explain request " .. tostring(id))
+  if request.kind == "saved" then return saved.accept(s, request, input, opts) end
   if request.lookup and type(input) == "table" and input.unresolved ~= nil then
     assert(type(input.unresolved) == "string" and input.unresolved:find("%S"), "Supply an unresolved-symbol reason")
     request.placeholder.placeholder = nil
@@ -945,6 +1014,21 @@ function M.fill(id, input, opts)
       covered = math.max(covered, stop["end"])
     end
     assert(covered == required["end"], "Explanation must cover the entire requested range")
+  end
+  -- Only host-captured source supplied in this request can verify new notes.
+  if request.selection and request.selection.source_capture and not review then
+    local captured = request.selection.source_capture.range
+    for _, item in ipairs(data) do
+      for _, part in ipairs(stops.boxes(item)) do
+        local r = source_engine.line_range(item.buf, part.start, part["end"])
+        local a, b = captured.start, captured["end"]
+        if item.path == request.selection.path and
+          (r.start[1] > a[1] or (r.start[1] == a[1] and r.start[2] >= a[2])) and
+          (r["end"][1] < b[1] or (r["end"][1] == b[1] and r["end"][2] <= b[2])) then
+          part._evidence = source_engine.capture(item.buf, r).evidence
+        end
+      end
+    end
   end
   local selected_stop, selected_box = current()
   local target_stop, target_box, insertion
@@ -1069,6 +1153,7 @@ function M.fill(id, input, opts)
   end
   s.pending[id] = nil
   local previous_i, previous_k = locate(selected_stop, selected_box)
+  saved.sync(s)
   if previous_i then
     s.stop, s.box = previous_i, previous_k
   end
@@ -1111,6 +1196,7 @@ function M.load(path)
   return ok
 end
 function M.cancel()
+  saved.cancel(s)
   for _, queue in pairs(s.questions) do
     for _, request in ipairs(queue) do
       if not request.turn.answer then
@@ -1138,7 +1224,13 @@ end
 M.render = render
 
 function M.setup(opts)
-  s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true }, opts or {})
+  s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
+    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true }, opts or {})
+  for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
+    local value = s.opts[name]
+    assert(type(value) == "number" and value > 0 and value == math.floor(value), name .. " must be a positive integer")
+  end
+  assert(type(s.opts.saved_reuse_unverified) == "boolean", "saved_reuse_unverified must be a boolean")
   require("code-tour.instance").register()
   for name, spec in pairs({
     CodeTourStop = { bg = "#273668" },
@@ -1156,6 +1248,7 @@ function M.setup(opts)
     vim.api.nvim_set_hl(0, name, spec)
   end
   badge.highlight()
+  require("code-tour.markdown").highlight()
   local old_return = vim.fn.maparg("<leader>au", "n", false, true)
   if old_return.desc == "CodeTour au" then vim.keymap.del("n", "<leader>au") end
   local mappings = {
@@ -1226,6 +1319,18 @@ function M.setup(opts)
     end
   end, { nargs = "?", force = true })
   local group = vim.api.nvim_create_augroup("CodeTour", { clear = true })
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufEnter" }, {
+    group = group,
+    callback = function()
+      if s.saved then
+        saved.revalidate(s)
+        local active = current()
+        if active and s.win and vim.api.nvim_win_is_valid(s.win) and vim.api.nvim_win_get_buf(s.win) == active.buf then
+          render(false)
+        end
+      end
+    end,
+  })
   vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = badge.highlight })
   vim.api.nvim_create_autocmd({ "VimResized", "WinResized", "TabEnter" }, {
     group = group,

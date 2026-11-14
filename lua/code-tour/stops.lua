@@ -103,6 +103,11 @@ function M.normalize(input, root)
   local result = {}
   root = vim.fs.normalize(root)
   local function normalize(stop, parent_stop, parent_box)
+    -- Generation evidence is host-owned; author payloads cannot assert it.
+    for key in pairs(stop) do
+      if type(key) == "string" and key:sub(1, 1) == "_" then stop[key] = nil end
+    end
+    stop.byte_range = nil
     -- Parent references are internal; payloads describe branches only through calls.
     stop._parent_stop, stop._parent_box, stop.placeholder = parent_stop, parent_box, nil
     if parent_stop then
@@ -147,6 +152,10 @@ function M.normalize(input, root)
     stop.parts = stop.parts or {}
     assert(vim.islist(stop.parts), "Parts must be a list")
     for _, part in ipairs(stop.parts) do
+      for key in pairs(part) do
+        if type(key) == "string" and key:sub(1, 1) == "_" then part[key] = nil end
+      end
+      part.byte_range = nil
       assert(
         integer(part.start, stop.start, stop["end"]) and integer(part["end"], part.start, stop["end"]),
         "Part outside stop"
@@ -201,6 +210,42 @@ function M.boxes(stop)
   return boxes
 end
 
+-- Only source-checked prepared entries may use this path. Ordinary authored
+-- normalization above retains its complete-coverage requirement.
+function M.hydrate_saved(item, location, entries)
+  local source = require("code-tour.source")
+  local stop = { title = item.title, path = location.path, file = location.path, buf = location.buf,
+    parts = {}, _saved_stop = item, _saved_stop_id = item.id }
+  identity(stop)
+  for index, entry in ipairs(entries) do
+    if entry.capture then
+      local box = index == 1 and stop or {}
+      if box ~= stop then identity(box); stop.parts[#stop.parts + 1] = box end
+      box.start, box["end"] = source.lines(entry.capture.range)
+      box.byte_range, box._saved, box._saved_id = vim.deepcopy(entry.capture.range), entry, entry.id
+      box.note = entry.status == "ready" and entry.model.note or "Loading explanation…"
+      entry.runtime = box
+    end
+  end
+  if not entries[1].capture then
+    stop._unlocated = true
+    stop.note = "Overview source unavailable"
+    stop.start, stop["end"] = stop.parts[1].start, stop.parts[1]["end"]
+  end
+  return stop
+end
+
+function M.first_box(stop)
+  for index, box in ipairs(M.boxes(stop)) do
+    if not box._unlocated then return index end
+  end
+  return 1
+end
+
+function M.note(box)
+  return require("code-tour.saved").note(box)
+end
+
 function M.roots(items)
   return vim.tbl_filter(function(stop) return not stop._parent_stop end, items)
 end
@@ -228,12 +273,18 @@ end
 function M.calls_in(items, stop, box, ready_only)
   return vim.tbl_filter(function(call)
     local site = call.callsite
-    return call._parent_stop == stop and site and site.start >= box.start and site["end"] <= box["end"]
+    return not box._unlocated and (not box._saved or box._saved.status == "ready")
+      and call._parent_stop == stop and site and site.start >= box.start and site["end"] <= box["end"]
       and (not ready_only or M.ready(call))
   end, items)
 end
 
 function M.ready(call)
+  if call._saved_stop then
+    local located = false
+    for _, box in ipairs(M.boxes(call)) do if not box._unlocated then located = true end end
+    if not located then return false end
+  end
   return not call.lazy and not call.placeholder
 end
 
@@ -242,14 +293,15 @@ end
 function M.level_route(items, scope)
   local result, children = {}, {}
   for i, call in ipairs(items) do
-    if call._parent_box and call.next and M.ready(call) then
+    if call._parent_box and call.callsite and call.next and M.ready(call)
+      and (not call._parent_box._saved or call._parent_box._saved.status == "ready") then
       children[call._parent_box] = children[call._parent_box] or {}
       table.insert(children[call._parent_box], i)
     end
   end
   local function visit(i)
     for k, box in ipairs(M.boxes(items[i])) do
-      result[#result + 1] = { stop = i, box = k }
+      if not box._unlocated then result[#result + 1] = { stop = i, box = k } end
       for _, child in ipairs(children[box] or {}) do visit(child) end
     end
   end
@@ -273,7 +325,7 @@ function M.route(items)
     local stop = items[i]
     if not M.ready(stop) then return end
     for k, box in ipairs(M.boxes(stop)) do
-      result[#result + 1] = { stop = i, box = k }
+      if not box._unlocated then result[#result + 1] = { stop = i, box = k } end
       for _, child in ipairs(children[box] or {}) do visit(child) end
     end
   end
@@ -321,7 +373,7 @@ function M.outline(stops)
       end
     end
     for k, box in ipairs(M.boxes(stop)) do
-      lines[#lines + 1] = ("  %d.%d %d-%d %s"):format(i, k, box.start, box["end"], box.note:gsub("\n", " "))
+      lines[#lines + 1] = ("  %d.%d %d-%d %s"):format(i, k, box.start, box["end"], M.note(box):gsub("\n", " "))
     end
   end
   return table.concat(lines, "\n")

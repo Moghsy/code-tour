@@ -1,0 +1,173 @@
+{
+  "kind": "code-tour.saved",
+  "version": 1,
+  "id": "1234567890abcdef1234567890abcdef",
+  "title": "Authentication journey",
+  "created_at": "2026-11-01T10:00:00Z",
+  "saved_at": "2026-11-01T11:00:00Z",
+  "repositories": [
+    {
+      "id": "app",
+      "label": "Application",
+      "root": "/tmp/saved-tour-app"
+    },
+    {
+      "id": "helpers",
+      "label": "Helpers",
+      "root": "/tmp/saved-tour-helpers"
+    }
+  ],
+  "stops": [
+    {
+      "id": "main-stop",
+      "title": "Authenticate",
+      "repo": "app",
+      "file": "auth.lua",
+      "overview": {
+        "id": "main-overview",
+        "note": "Check credentials.",
+        "locator": {
+          "file_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+          "range": {
+            "start": [
+              0,
+              0
+            ],
+            "end": [
+              0,
+              10
+            ]
+          },
+          "owners": [],
+          "scope_path": [],
+          "whole_owner": false,
+          "leaf_count": 0,
+          "before": [],
+          "after": []
+        },
+        "evidence": {
+          "status": "unverified",
+          "reason": "Standalone author payload"
+        },
+        "calls": []
+      },
+      "parts": [
+        {
+          "id": "credentials",
+          "note": "Read credentials.",
+          "locator": {
+            "file_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+            "range": {
+              "start": [
+                0,
+                0
+              ],
+              "end": [
+                0,
+                10
+              ]
+            },
+            "owners": [],
+            "scope_path": [],
+            "whole_owner": false,
+            "leaf_count": 0,
+            "before": [],
+            "after": []
+          },
+          "evidence": {
+            "status": "unverified",
+            "reason": "Standalone author payload"
+          },
+          "calls": [
+            {
+              "id": "helper-stop",
+              "title": "Helper",
+              "repo": "helpers",
+              "file": "helper.lua",
+              "overview": {
+                "id": "helper-overview",
+                "note": "Compute a result.",
+                "locator": {
+                  "file_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "range": {
+                    "start": [
+                      0,
+                      0
+                    ],
+                    "end": [
+                      0,
+                      10
+                    ]
+                  },
+                  "owners": [],
+                  "scope_path": [],
+                  "whole_owner": false,
+                  "leaf_count": 0,
+                  "before": [],
+                  "after": []
+                },
+                "evidence": {
+                  "status": "unverified",
+                  "reason": "Standalone author payload"
+                },
+                "calls": []
+              },
+              "parts": [],
+              "callsite": {
+                "symbol": "helper",
+                "locator": {
+                  "file_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "range": {
+                    "start": [
+                      0,
+                      0
+                    ],
+                    "end": [
+                      0,
+                      10
+                    ]
+                  },
+                  "owners": [],
+                  "scope_path": [],
+                  "whole_owner": false,
+                  "leaf_count": 0,
+                  "before": [],
+                  "after": []
+                }
+              },
+              "next": true
+            }
+          ]
+        },
+        {
+          "id": "session",
+          "note": "Start session.",
+          "locator": {
+            "file_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+            "range": {
+              "start": [
+                0,
+                0
+              ],
+              "end": [
+                0,
+                10
+              ]
+            },
+            "owners": [],
+            "scope_path": [],
+            "whole_owner": false,
+            "leaf_count": 0,
+            "before": [],
+            "after": []
+          },
+          "evidence": {
+            "status": "unverified",
+            "reason": "Standalone author payload"
+          },
+          "calls": []
+        }
+      ]
+    }
+  ]
+}

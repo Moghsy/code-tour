@@ -2,6 +2,7 @@
 local M = {}
 local model = require("code-tour.model")
 local stops = require("code-tour.stops")
+local markdown = require("code-tour.markdown")
 local layout
 local copy_view
 local function valid(win)
@@ -9,6 +10,8 @@ local function valid(win)
 end
 
 local function copy_text(enter)
+  if not layout then return end
+  if layout.current_text then layout.text = layout.current_text() end
   local width = math.max(1, math.min(100, vim.o.columns - 8))
   local lines = model.wrap(layout.text, width)
   local height = math.max(1, math.min(vim.o.lines - 6, #lines))
@@ -30,11 +33,13 @@ local function copy_text(enter)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].bufhidden, vim.bo[buf].filetype, vim.bo[buf].modifiable = "wipe", "markdown", false
   vim.b[buf].snacks_scroll = false
+  pcall(vim.treesitter.start, buf, "markdown")
   if copy_view then
     vim.api.nvim_win_set_config(copy_view.win, config)
     copy_view.source = layout.source
   else
     copy_view = { win = vim.api.nvim_open_win(buf, enter, config), buf = buf, source = layout.source }
+    vim.wo[copy_view.win].conceallevel = 2
     for _, key in ipairs({ "q", "<Esc>", "<leader>af" }) do
       vim.keymap.set("n", key, M.focus, { buffer = buf })
     end
@@ -65,6 +70,9 @@ function M.focus()
   if not layout or layout.text == "" then
     return
   end
+  if layout.guard and not layout.guard() then
+    require("code-tour.tour").render(false)
+  end
   copy_text(true)
 end
 
@@ -77,11 +85,14 @@ local function frame(rows, lines, title, width, indent, footer)
     { " " .. string.rep("─", math.max(0, width - vim.fn.strdisplaywidth(title) - 5)) .. "╮", border },
   }
   for _, line in ipairs(lines) do
-    rows[#rows + 1] = {
-      { string.rep(" ", indent) .. "│ ", border },
-      { line .. string.rep(" ", math.max(0, width - vim.fn.strdisplaywidth(line) - 4)), body },
-      { " │", border },
-    }
+    local row, used = { { string.rep(" ", indent) .. "│ ", border } }, 0
+    for _, chunk in ipairs(line) do
+      row[#row + 1] = chunk
+      used = used + vim.fn.strdisplaywidth(chunk[1])
+    end
+    row[#row + 1] = { string.rep(" ", math.max(0, width - used - 4)), body }
+    row[#row + 1] = { " │", border }
+    rows[#rows + 1] = row
   end
   if footer then
     rows[#rows + 1] = {
@@ -121,15 +132,22 @@ end
 
 local function thread_lines(box)
   local thread = {}
+  if box._saved and box._saved.status ~= "ready" then return thread end
   for _, turn in ipairs(box.thread) do
-    thread[#thread + 1] = "Q: " .. turn.question
-    thread[#thread + 1] = turn.answer and ("A: " .. turn.answer)
-      or (turn.error and ("Delivery: " .. turn.error) or "Waiting for answer…")
+    thread[#thread + 1] = "**Q:** " .. turn.question
+    if turn.answer then
+      -- Block-level answers (headings, lists, code) start below the label.
+      local block = turn.answer:match("^%s*[#>|`~]") or turn.answer:match("^%s*[-*+] ") or turn.answer:match("^%s*%d+[.)] ")
+      thread[#thread + 1] = (block and "**A:**\n" or "**A:** ") .. turn.answer
+    else
+      thread[#thread + 1] = turn.error and ("*Delivery:* " .. turn.error) or "*Waiting for answer…*"
+    end
   end
   return thread
 end
 
 function M.build(state, stop, box)
+  local note, ready = stops.note(box)
   local info = vim.fn.getwininfo(state.win)[1]
   local available = math.max(4, vim.api.nvim_win_get_width(state.win) - info.textoff)
   local first = math.min(box.start, vim.api.nvim_buf_line_count(stop.buf))
@@ -140,18 +158,17 @@ function M.build(state, stop, box)
   local width = math.min(100, available - indent)
   local height = vim.api.nvim_win_get_height(state.win)
   local minimum_code = math.min(box["end"] - box.start + 1, math.max(3, math.floor(height / 3)))
-  local has_qa = #box.thread > 0
+  local has_qa = ready and #box.thread > 0
   local calls = stops.calls_in(state.stops, stop, box)
   local hints = footer_hint(width, #calls > 0, stop._parent_stop)
   local overhead = 4 + (has_qa and 2 or 0)
   local budget = math.max(1, math.min(state.opts.page_lines or 18, height - minimum_code - overhead))
   local note_capacity = has_qa and math.max(1, math.floor(budget / 2)) or budget
-  local note = box.note
-  local notes = model.pages(note, width - 4, note_capacity)
+  local notes = markdown.pages(note, width - 4, note_capacity)
   state.note_page = math.max(1, math.min(state.note_page or 1, #notes))
   local thread = thread_lines(box)
   local qa = has_qa
-      and model.pages(table.concat(thread, "\n\n"), width - 4, math.max(1, budget - #notes[state.note_page]))
+      and markdown.pages(table.concat(thread, "\n\n"), width - 4, math.max(1, budget - #notes[state.note_page]))
     or nil
   state.page = qa and math.max(1, math.min(state.page or 1, #qa)) or 1
   state.note_pages, state.qa_pages = #notes, qa and #qa or 1
@@ -182,6 +199,13 @@ function M.build(state, stop, box)
     width = width,
     indent = indent,
     text = note .. (has_qa and ("\n\nQ&A\n" .. table.concat(thread, "\n\n")) or ""),
+    guard = function() return stops.note(box) == note end,
+    current_text = function()
+      local current_note, available_note = stops.note(box)
+      local current_thread = available_note and thread_lines(box) or {}
+      return current_note .. (#current_thread > 0 and ("\n\nQ&A\n" .. table.concat(current_thread, "\n\n")) or "")
+    end,
+    cursor_col = box.byte_range and box.byte_range.start[2] or nil,
   }
   layout = result
   if copy_view then

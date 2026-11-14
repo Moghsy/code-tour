@@ -74,6 +74,27 @@ Review uses `git show REF:path` (HEAD by default) or a stop's explicit `old` tex
 
 Composer: Ctrl-S stay/submit context, Ctrl-F follow, Ctrl-A add without sending, Ctrl-B save draft, Escape normal mode, q close. Question and explanation-context drafts are separate. Virtual rows are not selectable source text; `<leader>af` opens the full note and Q&A as plain text in a centered view, without examples, the inline frame or shortcut hints. It supports visual selection and yank, tracks box navigation, and q/Escape returns to source. Commands include `CodeTourLoad [path]`, `CodeTourAsk [question]`, `CodeTourExplain`, `CodeTourExplainContext`, `CodeTourDefinition`, `CodeTourExpand`, `CodeTourReturn`, `CodeTourReview [REF]`, `CodeTourList`, `CodeTourToggle`, `CodeTourFocus`, `CodeTourRecenter`, `CodeTourCancel`, and `CodeTourStop`.
 
+Saved tours live in a central library for the current Neovim profile. Save, list and open are explicit operations:
+
+```sh
+local-plugins/code-tour.nvim/bin/code-tour saved save --title 'Authentication'
+local-plugins/code-tour.nvim/bin/code-tour saved list --limit 5
+local-plugins/code-tour.nvim/bin/code-tour saved open TOUR_ID --pane SOCKET
+local-plugins/code-tour.nvim/bin/code-tour saved save --overwrite TOUR_ID --revision REVISION
+```
+
+Every ordinary save creates a distinct entry. Titles may repeat; use the stable ID to open or overwrite. Listing returns `{tours, issues}` with IDs, titles, UTC save times, repository labels/roots and exact-file SHA-256 revisions, sorted by most recent explicit save then ID. It reads JSON using Python's standard library and needs no editor, MessagePack, Herdr or source access. A missing library returns an empty list without creating it. Malformed and unsupported entries are reported individually.
+
+The library is `stdpath("data")/code-tour/tours`, normally `~/.local/share/nvim/code-tour/tours`. The CLI resolves `XDG_DATA_HOME` and `NVIM_APPNAME` to the same directory; editor-bound operations reject a profile/path mismatch. Records contain nested prepared overviews, ordered parts and prepared callees with independent source evidence and caller locators. They omit Q&A, examples, values, lazy branches, unfinished placeholders, historical source/diffs and conversation addresses. Save reports unfinished branches it omitted. Standalone author payloads and review explanations are saved as unverified; measuring current code during save cannot establish their generation inputs.
+
+Opening checks each box against current buffer contents, including unsaved edits. Verified matching syntax reuses its prose. Authored prose saved without host evidence is also reused while its saved code is unchanged (same syntax-token digest, or identical file bytes for parserless sources); it stays labelled unverified in the record and is withheld as soon as that code is edited (`saved_reuse_unverified = true`). Review-derived prose, parserless replies and notes that were already withheld at save time are never reused this way. Every remaining changed or unverified box queues for regeneration by the agent opening the tour. Queued boxes are sent in batches of up to `saved_batch_size = 12` boxes and roughly `saved_batch_chars = 40000` characters of captured code per request (always at least one box); a batch reply names each box and is validated per box, so a bad or missing stop fails only that box. Requests run one batch at a time, with the existing loading presentation and a default five-minute timeout per batch (`saved_request_timeout_ms = 300000`). Delivery errors, invalid replies and timeouts allow other queued targets to continue. Stale text and its Q&A are withheld in inline frames, the selectable view and question context. Replies are checked against captured source; harmless formatting/relocation can be accepted, while a meaningful edit requires explicit retry with the existing explain-current-box action (`<leader>ae`). Editing a ready box also makes it unavailable until explicitly regenerated. Cancelling, stopping or replacing the tour cancels its queue and timers.
+
+Use repeatable `--repo REPO_ID /current/root` and `--map-file REPO_ID old/path.lua new/path.lua` on `saved open` to reassociate moved repositories and renamed files. These mappings affect the live tour only. Missing or ambiguous targets are reported independently; usable descendants remain accessible through the snippet picker. If no target resolves, opening preserves the active tour. Caller attachments are checked separately, so an invalid caller cannot restore an obsolete badge or automatic continuation.
+
+Reusable syntax needs an installed Tree-sitter parser with the same compatibility tag. The matcher retains structure, identifiers, operators, literal values and comment text, ignoring coordinates and nonsemantic formatting. Byte ranges distinguish statements joined onto one line. Duplicate matches and unusable anchors remain unresolved rather than choosing a nearby line. Unsupported or partial-token selections can be freshly explained from exact text but remain unverified for future reuse. An unchanged selected snippet does not certify unchanged behavior in its dependencies or surrounding code.
+
+Opening, remapping, source edits and generation replies never write the library. Explicit overwrite checks the supplied revision under a per-entry lock and atomically replaces the JSON. Without `--revision`, overwrite can use the revision retained when that same ID was opened. A conflict or busy lock is reported without automatic retry; inspect the entry or stale lock before another explicit operation. A refreshed live tour still needs an explicit save.
+
 RPC API (both `require("tour")` and `require("code-tour")`):
 
 ```lua
@@ -81,6 +102,8 @@ show(stops, { root = "/project", append = false, review = true, base = "HEAD", o
 answer(markdown, "1.2")
 fill(request_id, stops, { after = 2 }) -- or { into = "1.2" }
 fill(request_id, stops, { review = true, base = "HEAD" })
+save_saved({ title = "Authentication" })
+open_saved(id, { origin = origin, repositories = { app = "/project" } })
 ```
 
 The Claude/Codex [authoring skill](skills/code-tour/SKILL.md) documents the complete payload and response workflows. Its small wrapper runs the installed CLI; set `CODE_TOUR_CLI` for a different installation path.
@@ -100,12 +123,19 @@ nvim --clean --headless -l local-plugins/code-tour.nvim/tests/inactive.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/count.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/lookup.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/diff.lua
+nvim --clean --headless -l local-plugins/code-tour.nvim/tests/saved_batch.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/branches.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/calls.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/next.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/outputs.lua
 nvim --clean --headless -l local-plugins/code-tour.nvim/tests/context.lua
+nvim --clean --headless -i NONE -l local-plugins/code-tour.nvim/tests/source.lua
+nvim --clean --headless -i NONE -l local-plugins/code-tour.nvim/tests/library.lua
+nvim --clean --headless -i NONE -l local-plugins/code-tour.nvim/tests/saved.lua
+PYTHONDONTWRITEBYTECODE=1 python3 local-plugins/code-tour.nvim/tests/test_library_cli.py
 PYTHONDONTWRITEBYTECODE=1 python3 local-plugins/code-tour.nvim/tests/test_cli.py
 ```
 
 The scroll test uses the local Lazy installation of Snacks. `page_lines = 18` controls the upper page budget and `smooth_scroll = false` skips animated tour navigation. Animation timing remains under Snacks configuration.
+
+The saved tests use isolated temporary data/state/cache roots and stub agent delivery. Source tests read installed Lua, Python and JavaScript parsers, printing any missing parser as a verification gap. Set `CODE_TOUR_PARSER_RUNTIME` to the directory containing `parser/` when it differs from `~/.local/share/nvim/site`. No test calls a live model.

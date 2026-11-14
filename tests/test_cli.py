@@ -96,6 +96,8 @@ class RPCIntegrationTests(unittest.TestCase):
         cls.root = Path(cls.temporary.name)
         cls.env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CODEX_', 'CLAUDE_'))}
         cls.env['XDG_STATE_HOME'] = str(cls.root / 'state')
+        cls.env['XDG_DATA_HOME'] = str(cls.root / 'data')
+        cls.env['XDG_CACHE_HOME'] = str(cls.root / 'cache')
         cls.source = cls.root / 'source.lua'
         cls.source.write_text('local x = 1\nlocal y = 2\nreturn x + y\n')
         cls.processes = []
@@ -103,7 +105,7 @@ class RPCIntegrationTests(unittest.TestCase):
         for i in range(2):
             address = str(cls.root / f'editor-{i}.sock')
             setup = 'lua vim.opt.rtp:prepend(' + json.dumps(str(PLUGIN)) + '); require("tour").setup({smooth_scroll=false})'
-            process = subprocess.Popen(['nvim', '--clean', '--headless', '--listen', address, '-c', setup],
+            process = subprocess.Popen(['nvim', '--clean', '--headless', '-n', '-i', 'NONE', '--listen', address, '-c', setup],
                                        cwd=cls.root, env=cls.env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             cls.processes.append(process)
             cls.addresses.append(address)
@@ -132,6 +134,57 @@ class RPCIntegrationTests(unittest.TestCase):
                                 cwd=self.root, env=self.env, timeout=15)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result
+
+    def test_saved_library_save_open_overwrite_and_remapping(self):
+        address = self.addresses[0]
+        self.run_cli('--pane', address, data=json.dumps([dict(file='source.lua', start=1, end=3, note='Saved current code')]))
+        first = json.loads(self.run_cli('saved', 'save', '--pane', address, '--title', 'RPC saved tour').stdout)
+        second = json.loads(self.run_cli('saved', 'save', '--pane', address).stdout)
+        self.assertNotEqual(first['id'], second['id'])
+        listed = json.loads(self.run_cli('saved', 'list', '--limit', '100').stdout)
+        self.assertIn(first['id'], [item['id'] for item in listed['tours']])
+        cli.rpc(address, 'require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end')
+        # Unchanged unchecked prose is reused by default; nothing is requested.
+        reused = json.loads(self.run_cli('saved', 'open', first['id'], '--pane', address).stdout)
+        self.assertEqual(reused['reused_unverified'], 1)
+        self.assertNotIn('generating', reused['counts'])
+        cli.rpc(address, 'require("tour").state().opts.saved_reuse_unverified=false')
+        opened = json.loads(self.run_cli('saved', 'open', first['id'], '--pane', address).stdout)
+        cli.rpc(address, 'require("tour").state().opts.saved_reuse_unverified=true')
+        self.assertEqual(opened['counts']['generating'], 1)
+        self.assertEqual(opened['revision'], first['revision'])
+        pending = cli.rpc(address, 'local s=require("tour").state(); local r=s.saved.active; '
+                          'return {id=r.id,token=s.id,path=r.entry.path}')
+        filled = json.loads(self.run_cli('--fill', pending['id'], '--pane', address, '--tour', pending['token'],
+                                        data=json.dumps([dict(file=pending['path'], start=1, end=3, note='Checked RPC replacement')])).stdout)
+        self.assertFalse(filled['navigate'])
+        self.assertEqual(cli.rpc(address, 'return require("tour").state().stops[1].note'), 'Checked RPC replacement')
+        mismatch_process = subprocess.run([str(CLI), 'saved', 'save', '--pane', address],
+                                          cwd=self.root, env=dict(self.env, NVIM_APPNAME='other-profile'),
+                                          capture_output=True, text=True, timeout=15)
+        self.assertEqual(mismatch_process.returncode, 1)
+        self.assertIn('profile/path mismatch', mismatch_process.stderr)
+        # A second editor's explicit overwrite makes this editor's retained revision stale.
+        self.run_cli('--pane', self.addresses[1], 'source.lua:1-3')
+        self.run_cli('saved', 'save', '--pane', self.addresses[1], '--overwrite', first['id'],
+                     '--revision', first['revision'], '--title', 'Concurrent update')
+        conflict = self.run_cli('saved', 'save', '--pane', address, '--overwrite', first['id'], expected=1)
+        self.assertIn('revision conflict', conflict.stderr)
+        self.run_cli('saved', 'save', '--pane', self.addresses[1], '--overwrite', second['id'], expected=1)
+        record = json.loads((Path(first['library']) / (first['id'] + '.json')).read_text())
+        repo = record['repositories'][0]
+        mapped = self.root / 'mapped'
+        mapped.mkdir(exist_ok=True)
+        (mapped / 'renamed.lua').write_text(self.source.read_text())
+        old_file = record['stops'][0]['file']
+        self.run_cli('saved', 'open', first['id'], '--pane', address, '--repo', repo['id'], str(mapped),
+                     '--map-file', repo['id'], old_file, 'renamed.lua')
+        self.assertEqual(cli.rpc(address, 'return require("tour").state().stops[1].path'), str(mapped / 'renamed.lua'))
+        mismatch = cli.rpc(address, 'local ok,err=pcall(require("tour").save_saved,{library="/wrong/profile"}); return {ok,tostring(err)}')
+        self.assertFalse(mismatch[0])
+        self.assertIn('profile/path mismatch', mismatch[1])
+        cli.rpc(address, 'require("tour").cancel()')
+        cli.rpc(self.addresses[1], 'local t=require("tour"); t.stop(); t.state().stops={}')
 
     def test_renamed_commands_and_legacy_cli_alias(self):
         address = self.addresses[0]

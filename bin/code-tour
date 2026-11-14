@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Show code tours and return answers/fills over Neovim's MessagePack RPC socket."""
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -240,8 +241,152 @@ def resolve_stops(items, root):
     return files
 
 
+
+def library_directory():
+    base = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+    profile = os.environ.get('NVIM_APPNAME') or 'nvim'
+    if not base.is_absolute() or Path(profile).is_absolute() or '..' in Path(profile).parts:
+        raise RuntimeError('Invalid XDG_DATA_HOME/NVIM_APPNAME profile path')
+    return base / profile / 'code-tour/tours'
+
+
+def saved_metadata(path):
+    raw = path.read_bytes()
+    record = json.loads(raw)
+    if not isinstance(record, dict) or record.get('kind') != 'code-tour.saved':
+        raise ValueError('Not a saved code tour')
+    if type(record.get('version')) is not int or record['version'] != 1:
+        raise ValueError('Unsupported saved tour version: ' + str(record.get('version')))
+    identity = record.get('id')
+    if not isinstance(identity, str) or not re.fullmatch('[0-9a-f]{32}', identity) or path.name != identity + '.json':
+        raise ValueError('Tour ID does not match filename or is invalid')
+    if not isinstance(record.get('title'), str) or not record['title'].strip():
+        raise ValueError('Missing tour title')
+    for key in ('created_at', 'saved_at'):
+        stamp = record.get(key)
+        if not isinstance(stamp, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', stamp):
+            raise ValueError('Invalid UTC timestamp: ' + key)
+        datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ')
+    if record['created_at'] > record['saved_at']:
+        raise ValueError('Save time precedes creation time')
+    repos, ids = record.get('repositories'), set()
+    if not isinstance(repos, list) or not repos:
+        raise ValueError('Missing repositories')
+    for repo in repos:
+        if not isinstance(repo, dict) or not all(isinstance(repo.get(k), str) and repo[k].strip() for k in ('id', 'label', 'root')):
+            raise ValueError('Invalid repository metadata')
+        if repo['id'] in ids or not Path(repo['root']).is_absolute() or os.path.normpath(repo['root']) != repo['root'] or '\x00' in repo['root']:
+            raise ValueError('Invalid or duplicate repository reference')
+        ids.add(repo['id'])
+    if not isinstance(record.get('stops'), list) or not record['stops']:
+        raise ValueError('Empty saved tour')
+    return dict(id=identity, title=record['title'], created_at=record['created_at'], saved_at=record['saved_at'],
+                repositories=repos, revision=hashlib.sha256(raw).hexdigest())
+
+
+def saved_list(limit):
+    if type(limit) is not int or limit <= 0:
+        raise ValueError('--limit must be a positive integer')
+    tours, issues = [], []
+    directory = library_directory()
+    for path in sorted(directory.glob('*.json')):
+        try:
+            tours.append(saved_metadata(path))
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            issues.append(dict(file=path.name, error=str(error)))
+    tours.sort(key=lambda item: item['id'])
+    tours.sort(key=lambda item: item['saved_at'], reverse=True)
+    return dict(tours=tours[:limit], issues=issues)
+
+
+def saved_main(argv):
+    parser = argparse.ArgumentParser(description='Explicit local saved code-tour operations')
+    commands = parser.add_subparsers(dest='operation', required=True)
+    listing = commands.add_parser('list')
+    listing.add_argument('--limit', type=int, required=True)
+    saving = commands.add_parser('save')
+    saving.add_argument('--title')
+    saving.add_argument('--overwrite', metavar='ID')
+    saving.add_argument('--revision', metavar='REV')
+    opening = commands.add_parser('open')
+    opening.add_argument('id')
+    opening.add_argument('--repo', nargs=2, action='append', default=[], metavar=('ID', 'PATH'))
+    opening.add_argument('--map-file', nargs=3, action='append', default=[], metavar=('REPO', 'OLD', 'NEW'))
+    for command_parser in (saving, opening):
+        command_parser.add_argument('--pane')
+        command_parser.add_argument('--agent-session')
+        command_parser.add_argument('--origin-session')
+        command_parser.add_argument('--origin-pane')
+    args = parser.parse_args(argv)
+    if args.operation == 'list':
+        if args.limit <= 0:
+            parser.error('--limit must be a positive integer')
+        # Deliberately before instances(), MessagePack, source reads or Herdr.
+        print(json.dumps(saved_list(args.limit)))
+        return 0
+    directory = library_directory()
+    metadata = None
+    roots = [Path.cwd()]
+    if args.operation == 'save':
+        if args.revision and not args.overwrite:
+            parser.error('--revision requires --overwrite')
+        if args.overwrite and not re.fullmatch('[0-9a-f]{32}', args.overwrite):
+            parser.error('Invalid overwrite ID')
+        if args.revision and not re.fullmatch('[0-9a-f]{64}', args.revision):
+            parser.error('Invalid revision')
+        if args.title is not None and not args.title.strip():
+            parser.error('Title must contain text')
+    else:
+        if not re.fullmatch('[0-9a-f]{32}', args.id):
+            parser.error('Invalid tour ID')
+        metadata = saved_metadata(directory / (args.id + '.json'))
+        overrides = dict(args.repo)
+        if len(overrides) != len(args.repo):
+            parser.error('Duplicate repository override')
+        repo_ids = {repo['id'] for repo in metadata['repositories']}
+        if not overrides.keys() <= repo_ids:
+            parser.error('Unknown repository override')
+        for repo_id, path in args.repo:
+            if not Path(path).is_absolute():
+                parser.error('Repository override requires an absolute path')
+        roots = [Path(overrides.get(repo['id'], repo['root'])) for repo in metadata['repositories']]
+        roots = [root for root in roots if root.is_dir()]
+    key, live = session_key(args), instances()
+    candidates = []
+    for root in roots or [Path.cwd()]:
+        candidate = choose(live, args.pane, key, root, [])
+        if candidate and not any(c['address'] == candidate['address'] for c in candidates):
+            candidates.append(candidate)
+    if len(candidates) > 1:
+        raise Ambiguous(candidates)
+    target = candidates[0] if candidates else None
+    if target is None:
+        if args.operation == 'save':
+            raise RuntimeError('No active editor to save; supply --pane')
+        if not roots:
+            raise RuntimeError('No available saved repository root; supply --repo ID PATH')
+        target = launch(roots[0])
+    opts = dict(library=str(directory))
+    if args.operation == 'save':
+        opts.update({k: v for k, v in dict(title=args.title, overwrite=args.overwrite, revision=args.revision).items() if v is not None})
+        result = deliver(target, 'save_saved', [opts], timeout=15)
+    else:
+        opts.update(repositories=dict(args.repo), files=args.map_file, cli=str(Path(__file__).resolve()))
+        current_origin = origin(args, roots[0] if roots else Path.cwd())
+        if current_origin is not None:
+            opts['origin'] = current_origin
+        result = deliver(target, 'open_saved', [args.id, opts], timeout=15)
+    remember(key, target)
+    if args.operation == 'open':
+        focus(target)
+    print(json.dumps(result))
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'saved':
+        return saved_main(argv[1:])
     if argv and argv[0] in ('show', 'answer', 'fill'):
         argv[0] = '--' + argv[0]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -325,5 +470,5 @@ if __name__ == '__main__':
         print(json.dumps(dict(error=str(error), instances=error.choices), indent=2), file=sys.stderr)
         raise SystemExit(2)
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
-        print(str(error), file=sys.stderr)
+        print(json.dumps(dict(error=str(error))) if len(sys.argv) > 1 and sys.argv[1] == 'saved' else str(error), file=sys.stderr)
         raise SystemExit(1)

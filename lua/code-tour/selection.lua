@@ -13,6 +13,7 @@ function M.capture(state, range)
   local path =
     assert(vim.uv.fs_realpath(vim.api.nvim_buf_get_name(buf)), "Save the source file before requesting an explanation")
   local first, last, text = range.start, range["end"], range.text
+  local byte_range
   if not first and visual then
     local a, b = vim.fn.getpos("v"), vim.fn.getpos(".")
     first, last = math.min(a[2], b[2]), math.max(a[2], b[2])
@@ -27,19 +28,28 @@ function M.capture(state, range)
     local box = stop and (state.box == 1 and stop or stop.parts[state.box - 1])
     if box and stop.buf == buf and line >= box.start and line <= box["end"] then
       first, last = box.start, box["end"]
+      if box.byte_range then
+        byte_range = box.byte_range
+        text = require("code-tour.source").text(buf, byte_range)
+      end
     else
       first, last = line, line
     end
   end
   first, last = math.min(first, last or first), math.max(first, last or first)
   assert(first >= 1 and last <= vim.api.nvim_buf_line_count(buf), "Selection is outside the source buffer")
+  local source = require("code-tour.source")
+  local capture = source.capture(buf, byte_range or source.line_range(buf, first, last))
+  local selected_text = text or table.concat(vim.api.nvim_buf_get_lines(buf, first - 1, last, false), "\n")
   return {
     buf = buf,
     path = path,
     file = vim.fs.relpath(state.root, path) or path,
     start = first,
     ["end"] = last,
-    text = text or table.concat(vim.api.nvim_buf_get_lines(buf, first - 1, last, false), "\n"),
+    text = selected_text,
+    byte_range = byte_range,
+    source_capture = capture and capture.text == selected_text and capture or nil,
     tick = vim.api.nvim_buf_get_changedtick(buf),
     tour = state.id,
   }

@@ -1,6 +1,50 @@
 -- Send only the context for this request. Full placement snapshots stay local.
 local M = {}
 
+function M.saved(args)
+  local entry, capture = args.entry, args.capture
+  local first, last = require("code-tour.source").lines(capture.range)
+  return table.concat({
+    "[code-tour saved regeneration]",
+    "Explain this captured CURRENT CODE only. Do not edit source. Do not use historical prose or comparison data.",
+    "Project root: " .. entry.root,
+    "Box: " .. entry.id .. " (" .. entry.role .. ")",
+    ("%s:%d-%d\nExact byte range (zero-based, exclusive end): %s\n```\n%s\n```")
+      :format(entry.path, first, last, vim.json.encode(capture.range), capture.text),
+    "Return a JSON list containing exactly ONE stop with file, start, end and note. Use the requested file and line coverage exactly.",
+    "Explain only the supplied bytes, even when other statements share a line. Keep overviews concise and parts detailed.",
+    "Omit parts, calls, examples, review data and all generation evidence. No --after/--into/--review flags.",
+    "Deliver JSON on stdin with this exact command:", args.command,
+  }, "\n")
+end
+
+-- Several queued saved boxes in one round trip; each reply stop names its box.
+function M.saved_batch(args)
+  local lines_of = require("code-tour.source").lines
+  local items = args.items
+  local lines = {
+    "[code-tour saved regeneration batch]",
+    "Explain EACH captured CURRENT CODE box below independently. Do not edit source. Do not use historical prose or comparison data.",
+    "Project root: " .. items[1].entry.root,
+    ("Boxes: %d"):format(#items),
+  }
+  for _, item in ipairs(items) do
+    local entry, capture = item.entry, item.capture
+    local first, last = lines_of(capture.range)
+    lines[#lines + 1] = ("\n## Box: %s (%s)\n%s:%d-%d\nExact byte range (zero-based, exclusive end): %s\n```\n%s\n```")
+      :format(entry.id, entry.role, entry.path, first, last, vim.json.encode(capture.range), capture.text)
+  end
+  vim.list_extend(lines, {
+    "",
+    "Return ONE JSON list with exactly one stop per box. Each stop has box (the Box ID above), file, start, end and note (optional title). Use each box's file and line coverage exactly.",
+    "Explain only each box's supplied bytes, even when other statements share a line. Keep overviews concise and parts detailed.",
+    "Omit parts, calls, examples, review data and all generation evidence. No --after/--into/--review flags.",
+    "Deliver JSON on stdin with this exact command:",
+    args.command,
+  })
+  return table.concat(lines, "\n")
+end
+
 local function rules(example, context)
   local text = "Use the code-tour skill. Do not edit source. Keep the overview concise. "
     .. "Make subpart explanations detailed: explain mechanisms, checks, state and results. "
@@ -53,7 +97,7 @@ function M.selection(args)
     "Explain the SELECTED CODE, not its definition.",
     "Project root: " .. args.root,
     ("%s:%d-%d\nExact selected text:\n```\n%s\n```"):format(selection.file, selection.start, selection["end"], selection.text),
-    "Containing box " .. args.box_id .. ": " .. args.box.note,
+    "Containing box " .. args.box_id .. ": " .. require("code-tour.stops").note(args.box),
     rules(args.example, args.context),
   }
   if args.context and args.context:find("%S") then lines[#lines + 1] = "Extra context:\n" .. args.context end
@@ -82,7 +126,7 @@ function M.symbol(args)
     "Call expression: " .. context.expression,
     ("Call site: %s:%d (byte column %d)\nNearby source:\n```\n%s\n```")
       :format(context.path, context.cursor[1], context.cursor[2] + 1, context.nearby),
-    "Caller box " .. args.box_id .. ": " .. context.box.note,
+    "Caller box " .. args.box_id .. ": " .. require("code-tour.stops").note(context.box),
     rules(example),
     'Locate the real implementation via receiver/imports; return JSON definition stops with current ranges. If unavailable, return {"unresolved":"reason"}.',
   }
@@ -102,7 +146,7 @@ function M.definition(args)
   local lines = {
     args.same and "[code-tour refine]" or "[code-tour explain]",
     "Project root: " .. args.root,
-    "Caller box " .. args.box_id .. ": " .. box.note,
+    "Caller box " .. args.box_id .. ": " .. require("code-tour.stops").note(box),
     "Call site:\n" .. source(stop, math.max(1, first - 2), math.min(vim.api.nvim_buf_line_count(stop.buf), last + 2)),
     ("Definition: %s:%d"):format(args.path, args.line),
     rules(example),
@@ -111,7 +155,7 @@ function M.definition(args)
   if args.same then
     lines[#lines + 1] = ("Refine definition box %s at %s:%d-%d; read source and return parts covering that full range.")
       :format(args.target_id, stop.file, args.definition_box.start, args.definition_box["end"])
-    if args.definition_box ~= box then lines[#lines + 1] = "Target note: " .. args.definition_box.note end
+    if args.definition_box ~= box then lines[#lines + 1] = "Target note: " .. require("code-tour.stops").note(args.definition_box) end
   else
     lines[#lines + 1] = "Read the real definition behind this location (follow export aliases); return JSON definition stops with current ranges."
   end

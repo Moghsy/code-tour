@@ -50,7 +50,8 @@ function M.capture(state, stop, box, site)
       start_col = last >= first and first - 1 or nil, end_col = last >= first and last or nil },
     nearby_start = nearby_start, nearby_end = nearby_end,
     nearby = table.concat(vim.api.nvim_buf_get_lines(stop.buf, nearby_start - 1, nearby_end, false), "\n"),
-    box_text = table.concat(vim.api.nvim_buf_get_lines(stop.buf, box.start - 1, box["end"], false), "\n"),
+    box_text = box.byte_range and require("code-tour.source").text(stop.buf, box.byte_range)
+      or table.concat(vim.api.nvim_buf_get_lines(stop.buf, box.start - 1, box["end"], false), "\n"),
   }
 end
 

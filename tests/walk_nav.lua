@@ -268,6 +268,24 @@ local function run()
   check(titles() == "Main.3" and rows()[5] == "CodeTourCurrentCall", "Next snippet is green in the calling part")
   tour.next_explanation(1)
   check(titles() == "B.1" and rows()[5] == "CodeTourDoneCall", "Once entered it is no longer next: " .. vim.inspect(rows()))
+  -- The editor reports how long the route is and what was pruned, and flags a broken path.
+  local shown = tour.show({ {
+    file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
+    parts = { { start = 1, ["end"] = 3, note = "Calls", calls = {
+      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+        callsite = { start = 2, ["end"] = 2, symbol = "line" } },
+      { file = "main.lua", start = 11, ["end"] = 12, title = "C", note = "C body",
+        callsite = { start = 3, ["end"] = 3, symbol = "line" }, parts = {},
+        calls = { { file = "main.lua", start = 14, ["end"] = 15, title = "E", note = "E body", next = true,
+          callsite = { start = 11, ["end"] = 11, symbol = "line" } } } },
+      { file = "main.lua", start = 17, ["end"] = 18, title = "D", lazy = true,
+        callsite = { start = 3, ["end"] = 3, symbol = "line" } },
+    } }, { start = 4, ["end"] = 6, note = "Finish" } },
+  } }, { root = root .. "/app" })
+  local route = shown.route
+  check(route.snippets == 2 and route.optional == 2 and route.lazy == 1, "Route summary counts walked, pruned and lazy snippets: " .. vim.inspect(route))
+  check(#route.broken == 1 and route.broken[1].from == "C" and route.broken[1].to == "E",
+    "A gold call below a call that is not walked is reported as a broken path: " .. vim.inspect(route.broken))
   -- Turning the option off restores the older route.
   tour.setup({ smooth_scroll = false, walk = false })
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Plain", note = "n",

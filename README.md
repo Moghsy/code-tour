@@ -155,3 +155,7 @@ With `walk = true` (the default; set `walk = false` for the older route), `aj`/`
 - Walking back (`ak`) retraces the same steps, including the returns.
 - In walk mode, the header numbers snippets in the order the walk first reaches them ("Snippet 10/34"); `an`/`ap` follow the same route as `aj` but one stop per snippet: a snippet's parts are skipped, while the returns to a calling snippet between branches are kept. The `al` picker uses the numbering order. A branch you opened yourself with `ad` reads "Snippet N/34 · optional", where N is the walked snippet it hangs off. With `walk = false` the older count of top-level snippets is used.
 - The CLI hands the tour to the editor as a file path, because msgpack-RPC drops requests nested more than about 32 levels deep, which a long chain of nested calls exceeds.
+
+## Parts tree and route summary
+
+Parts nest: a part may carry its own `parts`, each level covering its parent. `stop.parts` stays the depth-first flat list (so box ids `S.K` and `aj` are unchanged); each part records `_parent_part` and `_depth`, the header shows paths like `Part 2.1 (4/9)` for nested snippets, and graph boxes carry `parent`/`depth`. `show` returns `route = {snippets, boxes, optional, lazy, broken, refs}` so an agent can prune to a requested level of detail while keeping the end-to-end path: `broken` lists gold calls hanging below calls that are not walked.

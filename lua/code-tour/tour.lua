@@ -45,7 +45,7 @@ local function locate(stop, box)
     end
   end
 end
-local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key, walk_steps, walk_index -- defined once the graph helpers exist
+local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key, walk_steps, walk_index, route_summary -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -138,7 +138,8 @@ local function decorate(stop, box, layout)
       vim.api.nvim_buf_set_extmark(stop.buf, ns, line - 1, 0, {
         sign_text = line == part.start and tostring(k):sub(-2) or "│",
         sign_hl_group = part == box and "CodeTourFocus" or "CodeTourMeta",
-        priority = 120,
+        -- Where parts nest, the deepest part owns the sign on a shared line.
+        priority = 120 + (part._depth or 1),
       })
     end
   end
@@ -330,6 +331,7 @@ function M.show(input, opts)
   local data = prepare(input, root, review, base)
   local result = activate(data, opts, root, append, review, base)
   saved.sync(s)
+  result.route = route_summary()
   return result
 end
 
@@ -784,6 +786,47 @@ local function walk_numbers()
   return { by_stop = by_stop, owner = owner, order = order }
 end
 s.snippet_numbers = walk_numbers
+
+-- How long the walk is and what it leaves out, so the agent can prune to the level of
+-- detail asked for. `broken` lists gold calls that hang below a call that is not walked:
+-- they are never reached, which breaks the end-to-end path.
+route_summary = function()
+  if not (s.opts and s.opts.walk) or #s.stops == 0 then
+    return nil
+  end
+  local graph = build_graph()
+  local plan = require("code-tour.walk").plan(graph)
+  if not plan then
+    return nil
+  end
+  local walked, snippets = {}, 0
+  for _, step in ipairs(plan.steps) do
+    if (step.kind == "root" or step.kind == "enter") and not walked[step.node] then
+      walked[step.node] = true
+      snippets = snippets + 1
+    end
+  end
+  local optional, lazy, broken = 0, 0, {}
+  for _, node in ipairs(graph.nodes) do
+    if node.lazy then
+      lazy = lazy + 1
+    elseif not walked[node.id] then
+      optional = optional + 1
+    end
+  end
+  local by_id = {}
+  for _, node in ipairs(graph.nodes) do
+    by_id[node.id] = node
+  end
+  for _, link in ipairs(graph.links) do
+    local target = by_id[link.target]
+    if link.via == "call" and link.relation == "next" and not walked[link.source] and not walked[link.target]
+      and target and not target.lazy and not (by_id[link.source] or {}).lazy then
+      broken[#broken + 1] = { from = by_id[link.source].label, to = target.label }
+    end
+  end
+  return { snippets = snippets, boxes = #plan.steps, optional = optional, lazy = lazy, broken = broken, refs = #plan.refs }
+end
 walk_numbers_for_nav = walk_numbers
 
 -- Write the tour graph (nodes = snippets, links = next/optional routes) and return its path.
@@ -1424,7 +1467,16 @@ function M.fill(id, input, opts)
         "Refinement must stay inside its target box"
       )
       local additions = #stop.parts > 0 and stop.parts or { stop }
+      -- A reply that covers the whole target box refines it: its parts become that box's
+      -- children. A partial reply (a selected range) is an addition next to the box.
+      local refines = target_box ~= target_stop and range.start <= target_box.start
+        and range["end"] >= target_box["end"]
+      local base = target_box == target_stop and 0 or (refines and (target_box._depth or 1) or ((target_box._depth or 1) - 1))
       for _, part in ipairs(additions) do
+        part._depth = base + (part._depth or 1)
+        if not part._parent_part and target_box ~= target_stop then
+          part._parent_part = refines and target_box or target_box._parent_part
+        end
         if stop.example then
           part.example = stops.example_range(stop.example, part.start, part["end"])
         end

@@ -41,6 +41,9 @@ function M.build(state, id_of, tour)
           id = id_of(stop, box),
           stop = i,
           role = k == 1 and "overview" or "part",
+          -- Parts form a tree inside the snippet: the parent is the box this one refines.
+          parent = k > 1 and id_of(stop, box._parent_part or stop) or nil,
+          depth = k > 1 and (box._depth or 1) or 0,
           start = box.start,
           ["end"] = box["end"],
           saved_id = box._saved and box._saved.id or nil,

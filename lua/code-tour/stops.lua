@@ -55,25 +55,67 @@ function M.callsite(call, parent, box)
   return { start = box.start, ["end"] = box["end"] }
 end
 
-function M.validate_coverage(stop, parts)
-  parts = parts or stop.parts or {}
+-- Parts form a tree inside a snippet. `stop.parts` is its pre-order flattening (so box
+-- numbers S.K stay stable and walking the list is a depth-first walk); each part knows
+-- its `_parent_part` (nil for a top-level part) and its `_depth` (1 for top level).
+function M.top_parts(stop)
+  return vim.tbl_filter(function(part) return not part._parent_part end, stop.parts or {})
+end
+
+function M.children(stop, parent)
+  return vim.tbl_filter(function(part) return part._parent_part == parent end, stop.parts or {})
+end
+
+-- Every level must cover its parent's range with no gaps. `what` names the parent in errors.
+local function cover(range, parts, what)
   if #parts == 0 then return true end
   local ranges = {}
   for _, part in ipairs(parts) do
-    assert(integer(part.start, stop.start, stop["end"])
-      and integer(part["end"], part.start, stop["end"]), "Subexplanation outside overview")
+    assert(integer(part.start, range.start, range["end"])
+      and integer(part["end"], part.start, range["end"]), "Subexplanation outside " .. what)
     ranges[#ranges + 1] = part
   end
   table.sort(ranges, function(a, b) return a.start < b.start end)
-  local covered = stop.start - 1
+  local covered = range.start - 1
   for _, part in ipairs(ranges) do
     assert(part.start <= covered + 1,
-      ("Subexplanations must cover the whole overview; missing lines %d-%d"):format(covered + 1, part.start - 1))
+      ("Subexplanations must cover the whole %s; missing lines %d-%d"):format(what, covered + 1, part.start - 1))
     covered = math.max(covered, part["end"])
   end
-  assert(covered == stop["end"],
-    ("Subexplanations must cover the whole overview; missing lines %d-%d"):format(covered + 1, stop["end"]))
+  assert(covered == range["end"],
+    ("Subexplanations must cover the whole %s; missing lines %d-%d"):format(what, covered + 1, range["end"]))
   return true
+end
+
+function M.validate_coverage(stop, parts)
+  cover(stop, parts or M.top_parts(stop), "overview")
+  if parts then return true end
+  for _, part in ipairs(stop.parts or {}) do
+    cover(part, M.children(stop, part), "part")
+  end
+  return true
+end
+
+-- "2.1" for the first child of the second top-level part; nil for the overview.
+function M.path(stop, box)
+  if box == stop then return nil end
+  local names = {}
+  local at = box
+  while at do
+    local siblings = M.children(stop, at._parent_part)
+    for n, part in ipairs(siblings) do
+      if part == at then table.insert(names, 1, tostring(n)) end
+    end
+    at = at._parent_part
+  end
+  return table.concat(names, ".")
+end
+
+function M.nested(stop)
+  for _, part in ipairs(stop.parts or {}) do
+    if part._parent_part then return true end
+  end
+  return false
 end
 
 -- Convert the former watched-file format at the boundary, keeping one internal model.
@@ -153,18 +195,32 @@ function M.normalize(input, root)
     stop.tick = vim.api.nvim_buf_get_changedtick(buf)
     stop.parts = stop.parts or {}
     assert(vim.islist(stop.parts), "Parts must be a list")
-    for _, part in ipairs(stop.parts) do
-      for key in pairs(part) do
-        if type(key) == "string" and key:sub(1, 1) == "_" then part[key] = nil end
+    -- Parts may nest: a part's own `parts` refine it. Flatten depth-first, recording the tree.
+    local flat = {}
+    local function flatten(list, parent, depth)
+      assert(vim.islist(list), "Parts must be a list")
+      assert(depth <= 8, "Parts are nested too deeply")
+      for _, part in ipairs(list) do
+        for key in pairs(part) do
+          if type(key) == "string" and key:sub(1, 1) == "_" then part[key] = nil end
+        end
+        part.byte_range = nil
+        local range = parent or stop
+        assert(
+          integer(part.start, range.start, range["end"]) and integer(part["end"], part.start, range["end"]),
+          parent and "Part outside its parent part" or "Part outside stop"
+        )
+        text(part.note, "Part")
+        identity(part)
+        local children = part.parts
+        part.parts = nil
+        part._parent_part, part._depth = parent, depth
+        flat[#flat + 1] = part
+        if children then flatten(children, part, depth + 1) end
       end
-      part.byte_range = nil
-      assert(
-        integer(part.start, stop.start, stop["end"]) and integer(part["end"], part.start, stop["end"]),
-        "Part outside stop"
-      )
-      text(part.note, "Part")
-      identity(part)
     end
+    flatten(stop.parts, nil, 1)
+    stop.parts = flat
     M.validate_coverage(stop)
     assert(stop.old == nil or type(stop.old) == "string", "old must be the replaced text")
     stop.example = stop.example or stop.examples

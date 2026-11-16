@@ -193,7 +193,12 @@ function M.build(state, stop, box)
     end
   end
   if state.box > 1 then
-    counter = counter .. (" · Part %d/%d"):format(state.box - 1, #stop.parts)
+    if stops.nested(stop) then
+      -- A tree of parts: show where this one sits in it, and its position in reading order.
+      counter = counter .. (" · Part %s (%d/%d)"):format(stops.path(stop, box), state.box - 1, #stop.parts)
+    else
+      counter = counter .. (" · Part %d/%d"):format(state.box - 1, #stop.parts)
+    end
   end
   local page = #notes > 1 and (" · Page %d/%d"):format(state.note_page, #notes) or ""
   local name_width = width - 6 - vim.fn.strdisplaywidth(counter .. " · " .. page)

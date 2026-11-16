@@ -4,7 +4,8 @@ local M = {}
 
 -- Returns a list of { id, saved_id, status, reason, file, start, end, update_also = { ... } }.
 -- Each update_also item names a box whose prose depends on the stale one:
---   overview (summarises the stale part), caller (calls into the stale code,
+--   overview / parent (summarise the stale part; the overview is the root of the
+--   snippet's part tree), caller (calls into the stale code,
 --   directly or through any chain of callers, including snippets that merely
 --   overlap it), callee (calls made from the stale box: verify their call sites).
 function M.collect(graph)
@@ -58,12 +59,12 @@ function M.collect(graph)
             ["end"] = target["end"],
           }
         end
-        if box.role ~= "overview" then
-          for _, other in ipairs(node.boxes) do
-            if other.role == "overview" and other.stop == box.stop then
-              add(other, "overview")
-            end
-          end
+        -- Every box above this one in the snippet's tree summarises it: its parent parts
+        -- and, at the top, the overview.
+        local up = box.parent and ref[box.parent]
+        while up do
+          add(up.box, up.box.role == "overview" and "overview" or "parent")
+          up = up.box.parent and ref[up.box.parent]
         end
         -- Callers, transitively; start from this snippet and anything overlapping it.
         local queue, visited = { node.id }, { [node.id] = true }

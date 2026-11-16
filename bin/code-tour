@@ -152,7 +152,11 @@ def launch(root):
     session = os.environ.get('HERDR_SESSION')
     if not session:
         raise RuntimeError('No editor found. Automatic new-tab launch requires a Herdr session.')
-    result = herdr('tab', 'create', '--cwd', str(root), '--label', 'Code tour', '--no-focus', session=session)
+    args = ['tab', 'create', '--cwd', str(root), '--label', 'Code tour', '--no-focus']
+    for name in ('NVIM_APPNAME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME'):
+        if os.environ.get(name):
+            args += ['--env', name + '=' + os.environ[name]]
+    result = herdr(*args, session=session)
     pane = result['root_pane']['pane_id']
     address = str(Path(tempfile.gettempdir()) / f'code-tour-{os.getuid()}-{os.getpid()}.sock')
     plugin = Path(__file__).resolve().parents[1]
@@ -322,8 +326,14 @@ def saved_main(argv):
     saving.add_argument('--title')
     saving.add_argument('--overwrite', metavar='ID')
     saving.add_argument('--revision', metavar='REV')
+    inspecting = commands.add_parser('inspect')
+    inspecting.add_argument('id')
     opening = commands.add_parser('open')
     opening.add_argument('id')
+    opening.add_argument('--standalone', action='store_true', help='Read saved content without an AI conversation or generation')
+    opening.add_argument('--no-focus', action='store_true')
+    opening.add_argument('--lazy-agent', choices=['claude'])
+    opening.add_argument('--new-editor', action='store_true')
     opening.add_argument('--repo', nargs=2, action='append', default=[], metavar=('ID', 'PATH'))
     opening.add_argument('--map-file', nargs=3, action='append', default=[], metavar=('REPO', 'OLD', 'NEW'))
     for command_parser in (saving, opening):
@@ -354,21 +364,24 @@ def saved_main(argv):
         if not re.fullmatch('[0-9a-f]{32}', args.id):
             parser.error('Invalid tour ID')
         metadata = saved_metadata(directory / (args.id + '.json'))
-        overrides = dict(args.repo)
-        if len(overrides) != len(args.repo):
+        overrides = dict(getattr(args, 'repo', []))
+        if len(overrides) != len(getattr(args, 'repo', [])):
             parser.error('Duplicate repository override')
         repo_ids = {repo['id'] for repo in metadata['repositories']}
         if not overrides.keys() <= repo_ids:
             parser.error('Unknown repository override')
-        for repo_id, path in args.repo:
+        for repo_id, path in getattr(args, 'repo', []):
             if not Path(path).is_absolute():
                 parser.error('Repository override requires an absolute path')
         roots = [Path(overrides.get(repo['id'], repo['root'])) for repo in metadata['repositories']]
         roots = [root for root in roots if root.is_dir()]
+    if args.operation == 'inspect':
+        print(json.dumps(metadata))
+        return 0
     key, live = session_key(args), instances()
     candidates = []
     for root in roots or [Path.cwd()]:
-        candidate = choose(live, args.pane, key, root, [])
+        candidate = None if getattr(args, 'new_editor', False) else choose(live, args.pane, key, root, [])
         if candidate and not any(c['address'] == candidate['address'] for c in candidates):
             candidates.append(candidate)
     if len(candidates) > 1:
@@ -386,21 +399,48 @@ def saved_main(argv):
         result = deliver(target, 'save_saved', [opts], timeout=15)
     else:
         opts.update(repositories=dict(args.repo), files=args.map_file, cli=str(Path(__file__).resolve()))
-        current_origin = origin(args, roots[0] if roots else Path.cwd())
+        opts['standalone'] = args.standalone or bool(args.lazy_agent)
+        if args.lazy_agent:
+            opts['lazy_agent'] = dict(kind=args.lazy_agent, session=target.get('session'), pane_id=target.get('pane_id'), root=str(roots[0] if roots else Path.cwd()))
+        current_origin = None if opts['standalone'] else origin(args, roots[0] if roots else Path.cwd())
         if current_origin is not None:
             opts['origin'] = current_origin
         result = deliver(target, 'open_saved', [args.id, opts], timeout=15)
     remember(key, target)
     if args.operation == 'open':
-        focus(target)
+        result['editor'] = target
+        result['focus_error'] = None
+        if not args.no_focus:
+            try:
+                focus(target)
+            except (RuntimeError, OSError) as error:
+                result['focus_error'] = str(error)
     print(json.dumps(result))
+    return 0
+
+
+def graph_main(argv):
+    parser = argparse.ArgumentParser(description='Write the active tour graph and print its path')
+    parser.add_argument('--pane')
+    parser.add_argument('--agent-session')
+    args = parser.parse_args(argv)
+    root = Path.cwd().resolve()
+    target = choose(instances(), args.pane, session_key(args), root, [])
+    if target is None:
+        raise RuntimeError('No matching editor; supply --pane')
+    print(json.dumps(deliver(target, 'graph', [])))
     return 0
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'capabilities':
+        print(json.dumps(dict(protocol=1, standalone=True, inspect=True, no_focus=True, lazy_agent=True, new_editor=True)))
+        return 0
     if argv and argv[0] == 'saved':
         return saved_main(argv[1:])
+    if argv and argv[0] == 'graph':
+        return graph_main(argv[1:])
     if argv and argv[0] in ('show', 'answer', 'fill'):
         argv[0] = '--' + argv[0]
     parser = argparse.ArgumentParser(description=__doc__)

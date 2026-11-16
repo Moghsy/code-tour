@@ -37,6 +37,7 @@ end
 local original = { "local function main(x)", "  local y = x + 1", "  local z = y * 2", "  return z", "end" }
 local notes = {}
 vim.notify = function(message, level) notes[#notes + 1] = { message = message, level = level } end
+local stale_path = (vim.env.TMPDIR or "/tmp") .. "/code-tour-" .. vim.uv.getuid() .. "/%ID%.stale.json"
 local function run()
   vim.fn.mkdir(root .. "/app/.git", "p")
   vim.fn.writefile(original, root .. "/app/main.lua")
@@ -50,6 +51,8 @@ local function run()
     },
   } }, { root = root .. "/app" })
   local first = tour.save_saved({ title = "Stale journey" })
+  stale_path = stale_path:gsub("%%ID%%", first.id)
+  check(not table.concat(vim.fn.glob(library.directory() .. "/*.json", false, true), ""):find("stale", 1, true), "Library stays free of sidecars")
   tour.open_saved(first.id)
   check(not active(), "Unchanged tour has nothing stale")
   local buf = state().stops[1].buf
@@ -60,7 +63,7 @@ local function run()
   check(warned[1].message:find("1.3", 1, true) and warned[1].message:find("1.1", 1, true), "Warning names stale and linked boxes")
   vim.api.nvim_exec_autocmds("BufEnter", {})
   check(#vim.tbl_filter(function(n) return n.message:find("Stale explanation", 1, true) end, notes) == 1, "Same staleness warns once")
-  local report = vim.json.decode(table.concat(vim.fn.readfile(library.directory() .. "/" .. first.id .. ".json.stale.json"), "\n"))
+  local report = vim.json.decode(table.concat(vim.fn.readfile(stale_path), "\n"))
   local by_id = {}
   for _, item in ipairs(report.stale) do by_id[item.id] = item end
   check(by_id["1.3"] and by_id["1.3"].start == 3 and by_id["1.3"].saved_id, "Report identifies the stale part")
@@ -85,7 +88,8 @@ local function run()
   end
   tour.fill(request.id, items)
   vim.api.nvim_exec_autocmds("BufEnter", {})
-  check(not vim.uv.fs_stat(library.directory() .. "/" .. first.id .. ".json.stale.json"), "Report is removed once nothing is stale")
+  check(not vim.uv.fs_stat(stale_path), "Report is removed once nothing is stale")
+  check(not table.concat(vim.fn.glob(library.directory() .. "/*.json", false, true), ""):find("stale", 1, true), "Library still has no sidecars")
 end
 local ok, err = pcall(run)
 vim.fn.delete(root, "rf")

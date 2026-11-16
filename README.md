@@ -139,3 +139,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 local-plugins/code-tour.nvim/tests/test_cli.py
 The scroll test uses the local Lazy installation of Snacks. `page_lines = 18` controls the upper page budget and `smooth_scroll = false` skips animated tour navigation. Animation timing remains under Snacks configuration.
 
 The saved tests use isolated temporary data/state/cache roots and stub agent delivery. Source tests read installed Lua, Python and JavaScript parsers, printing any missing parser as a verification gap. Set `CODE_TOUR_PARSER_RUNTIME` to the directory containing `parser/` when it differs from `~/.local/share/nvim/site`. No test calls a live model.
+
+## Tour graph
+
+`:CodeTourGraph` (or `code-tour graph`) writes the active tour as NetworkX node-link JSON, the shape graphify uses, in `$TMPDIR/code-tour-UID/`. Nodes are snippets (identical ranges merge, boxes are attributes with their stale status); links are `next` (reading route), `optional` (red callees) and `overlaps`. Stale-explanation reports are computed from this graph. It is a projection of the tour; the saved tour format is unchanged.

@@ -1,70 +1,101 @@
--- Find explanations whose source changed, and the explanations linked to them.
--- Only saved tours track freshness; boxes without a saved entry are never stale.
-local stops = require("code-tour.stops")
+-- Find explanations whose source changed, and the explanations linked to them,
+-- by walking the tour graph (see graph.lua). Only saved tours track freshness.
 local M = {}
-
-local function overlaps(a, b)
-  return a.path ~= nil and a.path == b.path and a.start <= b["end"] and b.start <= a["end"]
-end
-
-local function flagged(box)
-  local status = box._saved and box._saved.status
-  return status == "source_changed" or status == "unresolved"
-end
 
 -- Returns a list of { id, saved_id, status, reason, file, start, end, update_also = { ... } }.
 -- Each update_also item names a box whose prose depends on the stale one:
---   overview (summarises the stale part), caller (calls into the stale code, on the
---   caller chain or from any other snippet whose callee overlaps it), callee (calls
---   made by the stale box: verify their call sites).
-function M.collect(state, id_of)
+--   overview (summarises the stale part), caller (calls into the stale code,
+--   directly or through any chain of callers, including snippets that merely
+--   overlap it), callee (calls made from the stale box: verify their call sites).
+function M.collect(graph)
+  local node_of, ref = {}, {}
+  for _, node in ipairs(graph.nodes) do
+    node_of[node.id] = node
+    for _, box in ipairs(node.boxes) do
+      ref[box.id] = { node = node, box = box }
+    end
+  end
+  local incoming, outgoing, overlaps = {}, {}, {}
+  for _, link in ipairs(graph.links) do
+    if link.via == "call" then
+      incoming[link.target] = incoming[link.target] or {}
+      table.insert(incoming[link.target], link)
+      outgoing[link.from_box] = outgoing[link.from_box] or {}
+      table.insert(outgoing[link.from_box], link)
+    elseif link.relation == "overlaps" then
+      overlaps[link.source] = overlaps[link.source] or {}
+      table.insert(overlaps[link.source], link.target)
+      overlaps[link.target] = overlaps[link.target] or {}
+      table.insert(overlaps[link.target], link.source)
+    end
+  end
   local result = {}
-  for _, stop in ipairs(state.stops) do
-    for _, box in ipairs(stops.boxes(stop)) do
-      if flagged(box) then
+  for _, node in ipairs(graph.nodes) do
+    for _, box in ipairs(node.boxes) do
+      if box.stale then
         local item = {
-          id = id_of(stop, box),
-          saved_id = box._saved.id,
-          status = box._saved.status,
-          reason = box._saved.reason,
-          file = stop.file,
+          id = box.id,
+          saved_id = box.saved_id,
+          status = box.status,
+          file = node.source_file,
           start = box.start,
           ["end"] = box["end"],
           update_also = {},
         }
-        local seen = { [box] = true }
-        local function add(s, b, relation)
-          if not s or not b or seen[b] then
+        local seen = { [box.id] = true }
+        local function add(target, relation)
+          if not target or seen[target.id] then
             return
           end
-          seen[b] = true
+          seen[target.id] = true
           item.update_also[#item.update_also + 1] = {
-            id = id_of(s, b),
-            saved_id = b._saved and b._saved.id or nil,
+            id = target.id,
+            saved_id = target.saved_id,
             relation = relation,
-            stale = flagged(b) or nil,
-            file = s.file,
-            start = b.start,
-            ["end"] = b["end"],
+            stale = target.stale,
+            file = (ref[target.id] or {}).node and ref[target.id].node.source_file,
+            start = target.start,
+            ["end"] = target["end"],
           }
         end
-        if box ~= stop then
-          add(stop, stop, "overview")
-        end
-        -- Whoever called into this snippet, all the way up the call chain.
-        local parent_stop, parent_box = stop._parent_stop, stop._parent_box
-        while parent_stop and parent_box do
-          add(parent_stop, parent_box, "caller")
-          parent_stop, parent_box = parent_stop._parent_stop, parent_stop._parent_box
-        end
-        -- Other snippets whose called definition covers the stale code.
-        for _, other in ipairs(state.stops) do
-          if other ~= stop and other._parent_stop and other._parent_box and overlaps(other, box) then
-            add(other._parent_stop, other._parent_box, "caller")
+        if box.role ~= "overview" then
+          for _, other in ipairs(node.boxes) do
+            if other.role == "overview" and other.stop == box.stop then
+              add(other, "overview")
+            end
           end
         end
-        for _, call in ipairs(stops.calls(state.stops, box)) do
-          add(call, call, "callee")
+        -- Callers, transitively; start from this snippet and anything overlapping it.
+        local queue, visited = { node.id }, { [node.id] = true }
+        for _, id in ipairs(overlaps[node.id] or {}) do
+          if not visited[id] then
+            visited[id] = true
+            queue[#queue + 1] = id
+          end
+        end
+        local head = 1
+        while head <= #queue do
+          local id = queue[head]
+          head = head + 1
+          for _, link in ipairs(incoming[id] or {}) do
+            local caller = ref[link.from_box]
+            if caller then
+              add(caller.box, "caller")
+              if not visited[caller.node.id] then
+                visited[caller.node.id] = true
+                queue[#queue + 1] = caller.node.id
+              end
+            end
+          end
+        end
+        for _, link in ipairs(outgoing[box.id] or {}) do
+          local callee = node_of[link.target]
+          for _, other in ipairs(callee and callee.boxes or {}) do
+            if other.role == "overview" then
+              add(other, "callee")
+              break
+            end
+          end
         end
         result[#result + 1] = item
       end
@@ -85,7 +116,7 @@ function M.summary(items, path)
   return "Stale: " .. table.concat(ids, ", ") .. " · report: " .. path
 end
 
--- Keep a JSON report beside the tour file so the agent can read exact ranges and links.
+-- Keep a JSON report outside the library so the agent can read exact ranges and links.
 function M.write(items, path, tour)
   if #items == 0 then
     vim.uv.fs_unlink(path)

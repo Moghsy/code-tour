@@ -274,7 +274,9 @@ local function activate(data, opts, root, append, review, base)
   local first = #s.stops + 1
   vim.list_extend(s.stops, data)
   s.root, s.review, s.base = root, review, base
-  s.origin = opts.origin or (append and s.origin or nil)
+  s.lazy_agent = opts.lazy_agent
+  s.standalone = opts.standalone == true
+  s.origin = not s.standalone and (opts.origin or (append and s.origin or nil)) or nil
   if opts.tour_file or not append then
     s.tour_file = opts.tour_file
   end
@@ -481,16 +483,27 @@ end
 
 -- Stale explanations (saved tours only) with the boxes that depend on them. The report
 -- file sits beside the tour file; requests cite it while anything is stale.
+-- Sidecar files (stale report, graph) live in tmp, never in the saved-tour library.
+local function sidecar(suffix)
+  local dir = (vim.env.TMPDIR or "/tmp") .. "/code-tour-" .. vim.uv.getuid()
+  vim.fn.mkdir(dir, "p", 448)
+  local id = s.saved and s.saved.record and s.saved.record.id or s.id
+  return dir .. "/" .. id .. "." .. suffix .. ".json"
+end
+local function box_id_of(stop, box)
+  local i, k = locate(stop, box)
+  return i and (i .. "." .. k) or "?"
+end
+local function build_graph()
+  return require("code-tour.graph").build(s, box_id_of, tour_path())
+end
 local function stale_items()
-  return require("code-tour.stale").collect(s, function(stop, box)
-    local i, k = locate(stop, box)
-    return i and (i .. "." .. k) or "?"
-  end)
+  return require("code-tour.stale").collect(build_graph())
 end
 local function stale_report()
   local stale = require("code-tour.stale")
   local items = stale_items()
-  local path = tour_path() .. ".stale.json"
+  local path = sidecar("stale")
   stale.write(items, path, tour_path())
   return items, stale.summary(items, path)
 end
@@ -530,6 +543,14 @@ local function warn_stale()
       .. ". <leader>ae on a stale box regenerates it and its linked boxes.",
     vim.log.levels.WARN
   )
+end
+
+-- Write the tour graph (nodes = snippets, links = next/optional routes) and return its path.
+function M.graph()
+  assert(#s.stops > 0, "Open a tour first")
+  local graph = build_graph()
+  local path = require("code-tour.graph").write(graph, sidecar("graph"))
+  return { path = path, nodes = #graph.nodes, links = #graph.links }
 end
 
 function M.save_saved(opts)
@@ -583,6 +604,14 @@ function M.open_saved(id, opts)
     opened = #plan.runtime, counts = counts, reused_unverified = reused, issues = plan.issues }
 end
 
+-- A reader opened from tanki (standalone) may generate only when it was started
+-- with --lazy-agent. deliver() then connects to or starts the agent on first use.
+local function generation()
+  if not s.standalone then return true end
+  if not s.lazy_agent then notify("Standalone review: generation is disabled"); return false end
+  return true
+end
+
 function M.ask(question, action, selected)
   local stop, box = current()
   if not stop then
@@ -610,6 +639,7 @@ function M.ask(question, action, selected)
     type(question) == "string" and question:find("%S") and not question:find("[%z\1-\8\11-\31\127]"),
     "Invalid question"
   )
+  if not generation(function() M.ask(question, action, selected) end) then return end
   local id = box_id(stop, box)
   for _, pending in ipairs(s.questions[id] or {}) do
     assert(
@@ -681,6 +711,7 @@ local function request_id()
 end
 
 function M.explain_range(selection, context, action)
+  if not generation(function() M.explain_range(selection, context, action) end) then return end
   assert(selection.tour == s.id, "The tour changed; select the code again")
   assert(
     vim.api.nvim_buf_is_valid(selection.buf) and vim.api.nvim_buf_get_changedtick(selection.buf) == selection.tick,
@@ -762,6 +793,7 @@ function M.explain(selected, with_context)
           end
         end
       end
+      if not generation() then return end
       local id = saved.retry(s, active_box._saved.id, linked)
       render(false)
       return id
@@ -804,6 +836,7 @@ function M.explain_with_context(selected)
 end
 
 function M.explain_symbol(context, reason, call)
+  if not generation(function() M.explain_symbol(context, reason, call) end) then return end
   if context.tour ~= s.id or not locate(context.stop, context.box) then return end
   if not context.expression:find("%S") then notify("Place the cursor on a symbol to inspect it"); return end
   for id, pending in pairs(s.pending) do
@@ -863,6 +896,7 @@ function M.explain_symbol(context, reason, call)
 end
 
 function M.explain_location(location, call, inspect)
+  if not generation(function() M.explain_location(location, call, inspect) end) then return end
   local stop, box = current()
   if not stop then
     return
@@ -1034,6 +1068,7 @@ function M.return_to_caller()
 end
 
 function M.explain_definition(inspect)
+  if not generation(function() M.explain_definition(inspect) end) then return end
   inspect = inspect == true
   local stop, box = current()
   if not stop then return end
@@ -1401,6 +1436,10 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("CodeTourLoad", function(args)
     M.load(args.args ~= "" and args.args or nil)
   end, { nargs = "?", complete = "file", force = true })
+  vim.api.nvim_create_user_command("CodeTourGraph", function()
+    local ok, result = pcall(M.graph)
+    notify(ok and ("Tour graph: " .. result.path) or result, ok and vim.log.levels.INFO or vim.log.levels.WARN)
+  end, { force = true })
   vim.api.nvim_create_user_command("CodeTourAsk", function(args)
     M.ask(args.args)
   end, { nargs = "*", force = true })

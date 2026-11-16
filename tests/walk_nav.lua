@@ -211,7 +211,33 @@ local function run()
     "Every call we came out of is marked done: " .. vim.inspect(g))
   tour.next_explanation(-2)
   g = groups()
-  check(g[10] == "CodeTourDoneCall" and g[21] == "CodeTourNextCall", "Walking back un-marks the later call, which is gold again: " .. vim.inspect(g))
+  check(g[10] == "CodeTourDoneCall" and g[21] == "CodeTourCurrentCall", "Walking back un-marks the later call, which is the next snippet again: " .. vim.inspect(g))
+  -- The next snippet is green whichever box is focused, not only the box that makes the call.
+  tour.show({ {
+    file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
+    parts = {
+      { start = 1, ["end"] = 3, note = "First part" },
+      { start = 4, ["end"] = 6, note = "Second part", calls = {
+        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+          callsite = { start = 5, ["end"] = 5, symbol = "line" } } } },
+    },
+  } }, { root = root .. "/app" })
+  local function rows()
+    local s2, found = tour.state(), {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(s2.stops[s2.stop].buf,
+      vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })) do
+      local g = mark[4].hl_group
+      if g == "CodeTourCurrentCall" or g == "CodeTourNextCall" or g == "CodeTourCall" or g == "CodeTourDoneCall" then found[mark[2] + 1] = g end
+    end
+    return found
+  end
+  check(titles() == "Main.1" and rows()[5] == "CodeTourCurrentCall", "Next snippet is green from the overview: " .. vim.inspect(rows()))
+  tour.next_explanation(1)
+  check(titles() == "Main.2" and rows()[5] == "CodeTourCurrentCall", "Next snippet is green in a part that does not make the call: " .. vim.inspect(rows()))
+  tour.next_explanation(1)
+  check(titles() == "Main.3" and rows()[5] == "CodeTourCurrentCall", "Next snippet is green in the calling part")
+  tour.next_explanation(1)
+  check(titles() == "B.1" and rows()[5] == "CodeTourDoneCall", "Once entered it is no longer next: " .. vim.inspect(rows()))
   -- Turning the option off restores the older route.
   tour.setup({ smooth_scroll = false, walk = false })
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Plain", note = "n",

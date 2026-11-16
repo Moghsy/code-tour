@@ -157,7 +157,8 @@ local function decorate(stop, box, layout)
           -- nil outside the walk (older labels); true for the edge aj follows next, else false.
           local current
           if s.opts and s.opts.walk then
-            current = owner == stop and upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
+            current = upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
+              and upcoming.source == owner.path .. ":" .. owner.start .. "-" .. owner["end"]
               and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
               and upcoming.callsite.start_col == site.start_col
           end
@@ -684,9 +685,11 @@ walk_upcoming = function(stop, box)
       done[edge_key(via.source, { symbol = via.symbol, start = via.callsite.start, start_col = via.callsite.start_col })] = true
     end
   end
-  local following = index and steps[index + 1]
-  if following and following.kind == "enter" and following.via and following.via.from_box == box_id_of(stop, box) then
-    return following.via, done
+  -- The next snippet is the next edge the walk enters, whichever box it leaves from.
+  for n = (index or #steps) + 1, #steps do
+    if steps[n].kind == "enter" and steps[n].via then
+      return steps[n].via, done
+    end
   end
   return nil, done
 end

@@ -501,11 +501,13 @@ def main(argv=None):
                      review=args.review, base=args.base).items() if value is not None}
         result = deliver(target, 'fill', [args.fill, data, placement], args.tour)
     else:
+        # Large nested tours exceed msgpack-RPC's nesting limit, so the editor reads the file itself.
+        path = tour_file(args, data)
         opts = dict(root=str(root), append=args.append, review=args.review, base=args.base,
                     origin=origin(args, root), cli=str(Path(__file__).resolve()),
-                    tour_file=None if data is None or args.append else tour_file(args, data))
+                    tour_file=None if args.append else path)
         opts = {key: value for key, value in opts.items() if value is not None}
-        result = rpc(target['address'], 'return require("tour").show(...)', [data, opts], timeout=15)
+        result = rpc(target['address'], 'return require("tour").show_file(...)', [path, opts], timeout=15)
     remember(key, target)
     # The editor decides whether a reply should move the reader.
     if args.answer is None and (not args.fill or result.get('navigate')):

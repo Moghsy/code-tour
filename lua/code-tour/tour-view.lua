@@ -176,6 +176,22 @@ function M.build(state, stop, box)
   local name = (stop.title or "Snippet"):gsub("^%s*%d+[.)]%s+", "", 1)
   local snippet, total = stops.snippet_position(state.stops, stop)
   local counter = ("Snippet %s/%d"):format(snippet or "…", total)
+  -- Walk mode numbers every walked snippet in reading order; branches off the walk are optional.
+  local numbers = state.snippet_numbers and state.snippet_numbers()
+  if numbers then
+    local index
+    for i, item in ipairs(state.stops) do
+      if item == stop then index = i end
+    end
+    local own, owner = index and numbers.by_stop[index], index and numbers.owner[index]
+    if own then
+      counter = ("Snippet %d/%d"):format(own, #numbers.order)
+    elseif owner then
+      counter = ("Snippet %d/%d · optional"):format(owner, #numbers.order)
+    else
+      counter = "Optional snippet"
+    end
+  end
   if state.box > 1 then
     counter = counter .. (" · Part %d/%d"):format(state.box - 1, #stop.parts)
   end

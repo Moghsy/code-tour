@@ -45,7 +45,7 @@ local function locate(stop, box)
     end
   end
 end
-local walk_move, walk_upcoming -- defined once the graph helpers exist
+local walk_move, walk_upcoming, walk_numbers_for_nav -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -321,6 +321,16 @@ function M.show(input, opts)
   return result
 end
 
+-- Show a tour read from a JSON file. The CLI sends the path rather than the data
+-- because msgpack-RPC drops requests nested deeper than about 32 levels, which a
+-- long chain of nested calls easily exceeds.
+function M.show_file(path, opts)
+  local data = vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+  opts = opts or {}
+  -- A tmp file is only the tour's identity when this call starts a tour.
+  return M.show(data, opts)
+end
+
 function M.hide()
   s.visible = false
   scroll.cancel()
@@ -366,6 +376,16 @@ function M.next_snippet(delta)
     return
   end
   clear_intent()
+  local numbers = walk_numbers_for_nav and walk_numbers_for_nav()
+  if numbers and #numbers.order > 0 then
+    local here = numbers.owner[s.stop] or 0
+    local target = numbers.order[math.max(1, math.min(#numbers.order, here + delta))]
+    s.stop, s.box, s.frames, s.walk_index = target, stops.first_box(s.stops[target]), {}, nil
+    reset_pages()
+    s.visible = true
+    render(true)
+    return
+  end
   local order = {}
   local index = stops.snippet_position(s.stops, current()) or 1
   for i, stop in ipairs(s.stops) do
@@ -437,7 +457,12 @@ function M.list_snippets()
     prompt = "CodeTour snippets",
     format_item = function(item)
       local i = stops.snippet_position(s.stops, item.stop)
+      local numbers = walk_numbers_for_nav and walk_numbers_for_nav()
       local prefix = item.stop._parent_stop and "  ↳ " or ((i and tostring(i) or "…") .. ". ")
+      if numbers then
+        local n = numbers.by_stop[locate(item.stop)]
+        prefix = n and (n .. ". ") or "  ↳ "
+      end
       return ("%s%s — %s:%d-%d"):format(
         prefix,
         item.stop.title or "Snippet",
@@ -641,6 +666,56 @@ walk_upcoming = function(stop, box)
     return following.via
   end
 end
+
+-- In walk mode snippets are numbered in the order the walk first reaches them.
+-- Returns { by_stop = { [stop index] = n }, order = { stop index... } } or nil
+-- (older route, or a graph the walk cannot plan). Snippets off the walk, such as
+-- optional branches, have no number.
+local function walk_numbers()
+  if not (s.opts and s.opts.walk) or #s.stops == 0 then
+    return nil
+  end
+  local graph = build_graph()
+  local plan = require("code-tour.walk").plan(graph)
+  if not plan then
+    return nil
+  end
+  local number_of, order, first_stop = {}, {}, {}
+  for _, node in ipairs(graph.nodes) do
+    first_stop[node.id] = node.stops[1]
+  end
+  for _, step in ipairs(plan.steps) do
+    if (step.kind == "root" or step.kind == "enter") and not number_of[step.node] then
+      local index = first_stop[step.node]
+      if index and stops.ready(s.stops[index]) then
+        order[#order + 1] = index
+        number_of[step.node] = #order
+      end
+    end
+  end
+  local by_stop = {}
+  for _, node in ipairs(graph.nodes) do
+    for _, index in ipairs(node.stops) do
+      by_stop[index] = number_of[node.id]
+    end
+  end
+  -- Optional branches inherit the number of the walked snippet they hang off.
+  local index_of = {}
+  for i, stop in ipairs(s.stops) do
+    index_of[stop] = i
+  end
+  local owner = {}
+  for i, stop in ipairs(s.stops) do
+    local at = stop
+    while at and not by_stop[index_of[at]] do
+      at = at._parent_stop
+    end
+    owner[i] = at and by_stop[index_of[at]] or nil
+  end
+  return { by_stop = by_stop, owner = owner, order = order }
+end
+s.snippet_numbers = walk_numbers
+walk_numbers_for_nav = walk_numbers
 
 -- Write the tour graph (nodes = snippets, links = next/optional routes) and return its path.
 function M.graph()

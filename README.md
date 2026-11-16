@@ -153,3 +153,5 @@ With `walk = true` (the default; set `walk = false` for the older route), `aj`/`
 - A gold call back to a snippet already on the path (recursion or a loop) or to one already walked (a shared callee) is a reference: it is never walked. No marking is needed; `"ref": true` only forces it. Lazy snippets are skipped until explained.
 - The gold call `aj` takes next is highlighted in its own colour (green); other gold calls keep the gold badge, labelled "later snippet". Several calls on one line are separate edges, each with its own columns.
 - Walking back (`ak`) retraces the same steps, including the returns.
+- In walk mode, the header numbers snippets in the order the walk first reaches them ("Snippet 10/34"); `an`/`ap` and the `al` picker use the same order. A branch you opened yourself with `ad` reads "Snippet N/34 · optional", where N is the walked snippet it hangs off. With `walk = false` the older count of top-level snippets is used.
+- The CLI hands the tour to the editor as a file path, because msgpack-RPC drops requests nested more than about 32 levels deep, which a long chain of nested calls exceeds.

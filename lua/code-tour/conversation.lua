@@ -27,13 +27,94 @@ local function request(origin, args, callback)
   )
 end
 
+-- Start one agent in a single new Herdr tab (no split panes) when none is connected.
+function M.connect(root, callback, kind)
+  local session = vim.env.HERDR_SESSION
+  if not session then
+    callback(nil, "No agent is connected and Herdr is not available to start one.")
+    return
+  end
+  kind = kind or "claude"
+  local base = { session = session }
+  request(base, { "tab", "create", "--cwd", root, "--label", "Code tour agent", "--no-focus" }, function(created, err)
+    local pane = created and created.root_pane and created.root_pane.pane_id
+    if not pane then
+      callback(nil, err or "Could not create a Herdr tab for the agent")
+      return
+    end
+    request(base, { "agent", "start", "code-tour", "--kind", kind, "--pane", pane }, function(started, start_err)
+      if not started then
+        callback(nil, start_err or "Could not start the agent")
+        return
+      end
+      request(base, { "agent", "list" }, function(list, list_err)
+        local agent
+        for _, item in ipairs(list and list.agents or {}) do
+          if item.pane_id == pane then
+            agent = item
+          end
+        end
+        if not agent then
+          callback(nil, list_err or "The new agent was not detected")
+          return
+        end
+        request(base, { "pane", "process-info", "--pane", pane }, function(info, info_err)
+          local pids = {}
+          for _, process in ipairs(info and (info.process_info or {}).foreground_processes or {}) do
+            pids[#pids + 1] = process.pid
+          end
+          if #pids == 0 then
+            callback(nil, info_err or "The new agent process is missing")
+            return
+          end
+          callback({
+            session = session,
+            pane_id = pane,
+            tab_id = agent.tab_id,
+            agent = agent.agent,
+            process_ids = pids,
+            agent_session = (agent.agent_session or {}).value,
+          })
+        end)
+      end)
+    end)
+  end)
+end
+
+-- Deliver to the connected agent, connecting a fresh one first when it is missing or gone.
+function M.deliver(origin, root, text, action, callback, set_origin)
+  local function connect()
+    M.connect(root, function(new, err)
+      if not new then
+        callback(false, err)
+        return
+      end
+      set_origin(new)
+      M.send(new, text, action, callback)
+    end)
+  end
+  if not origin then
+    connect()
+    return
+  end
+  validate(origin, function(ok, err, gone)
+    if ok then
+      M.send(origin, text, action, callback, true)
+    elseif gone then
+      connect()
+    else
+      callback(false, err)
+    end
+  end)
+end
+
 -- RPC tours return answers directly to a box, so no request/response files are needed.
-function M.send(origin, text, action, callback)
+function M.send(origin, text, action, callback, validated)
   if not origin then
     callback(false, "No originating conversation recorded; start the tour from Claude or Codex.")
     return
   end
-  validate(origin, function(ok, err)
+  local function deliver(ok, err)
     if not ok then
       callback(false, err)
       return
@@ -57,7 +138,12 @@ function M.send(origin, text, action, callback)
         callback(true)
       end
     end)
-  end)
+  end
+  if validated then
+    deliver(true)
+  else
+    validate(origin, deliver)
+  end
 end
 
 validate = function(origin, callback)
@@ -76,7 +162,8 @@ validate = function(origin, callback)
     if not live or (origin.agent_session and (live.agent_session or {}).value ~= origin.agent_session) then
       callback(
         false,
-        "The originating conversation has closed or changed. Start a new tour from the intended conversation."
+        "The originating conversation has closed or changed. Start a new tour from the intended conversation.",
+        true
       )
       return
     end
@@ -102,7 +189,8 @@ validate = function(origin, callback)
       end
       callback(
         same,
-        same and nil or "The originating agent process changed. Start a new tour from that conversation."
+        same and nil or "The originating agent process changed. Start a new tour from that conversation.",
+        not same
       )
     end)
   end)

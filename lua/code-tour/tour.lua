@@ -275,6 +275,9 @@ local function activate(data, opts, root, append, review, base)
   vim.list_extend(s.stops, data)
   s.root, s.review, s.base = root, review, base
   s.origin = opts.origin or (append and s.origin or nil)
+  if opts.tour_file or not append then
+    s.tour_file = opts.tour_file
+  end
   s.cli = opts.cli or s.cli
   s.visible = true
   reset_pages()
@@ -455,6 +458,27 @@ local function command(action)
     .. " --tour "
     .. s.id
 end
+-- Path of the file that describes this tour: the saved library entry, else the tmp tour file.
+local function tour_path()
+  if s.saved and s.saved.record and s.saved.record.id then
+    return library.directory() .. "/" .. s.saved.record.id .. ".json"
+  end
+  if not s.tour_file then
+    local dir = (vim.env.TMPDIR or "/tmp") .. "/code-tour-" .. vim.uv.getuid()
+    vim.fn.mkdir(dir, "p", 448)
+    s.tour_file = dir .. "/" .. s.id .. ".md"
+    vim.fn.writefile(vim.split(stops.outline(s.stops), "\n", { plain = true }), s.tour_file)
+  end
+  return s.tour_file
+end
+
+-- Deliver to the connected agent; open one new Herdr tab for it when none is connected.
+local function deliver(prompt, action, callback)
+  conversation.deliver(s.origin, s.root, prompt, action, callback, function(origin)
+    s.origin = origin
+  end)
+end
+
 function M.save_saved(opts)
   opts = opts or {}
   library.check_directory(opts.library)
@@ -485,7 +509,8 @@ function M.open_saved(id, opts)
   activate(plan.runtime, opts, root, false, false, nil)
   saved.start(s, plan, {
     command = function(request) return command("fill " .. request) end,
-    send = function(prompt, callback) return conversation.send(s.origin, prompt, "stay", callback) end,
+    tour = function() return library.directory() .. "/" .. id .. ".json" end,
+    send = function(prompt, callback) return deliver(prompt, "stay", callback) end,
     refresh = function()
       saved.revalidate(s)
       local active = current()
@@ -545,15 +570,15 @@ function M.ask(question, action, selected)
   end
   -- The originating agent built this tour and holds its notes, examples and
   -- earlier Q&A, so only send what identifies the box and the new question.
-  local prompt = ("[code-tour question] Box %s · %s:%d-%d%s\nQuestion: %s\n"
-    .. "Answer in Markdown without editing source; deliver it on stdin using:\n%s")
-    :format(id, stop.file, first, last, selected and " (selected lines)" or "", question, command("answer " .. id))
+  local prompt = ("[code-tour question] tour: %s\nstop %s · %s:%d-%d%s\nQuestion: %s\nReply: %s")
+    :format(tour_path(), id, stop.file, first, last, selected and " (selected lines)" or "", question,
+      command("answer " .. id))
   local turn = { question = question, box_id = id }
   box.thread[#box.thread + 1] = turn
   s.questions[id] = s.questions[id] or {}
   s.questions[id][#s.questions[id] + 1] = { box = box, stop = stop, turn = turn }
   started(action == "add" and "Sending question draft to agent…" or "Sending question to agent…")
-  conversation.send(s.origin, prompt, action, function(ok, err)
+  deliver(prompt, action, function(ok, err)
     if not ok then
       turn.error = tostring(err)
       notify(err)
@@ -632,7 +657,7 @@ function M.explain_range(selection, context, action)
   request.snapshot = stops.snapshot(s.stops)
   s.pending[id] = request
   local prompt = requests.selection({
-    root = s.root, selection = selection, coverage = request.coverage, context = context,
+    tour = tour_path(), root = s.root, selection = selection, coverage = request.coverage, context = context,
     box = anchor or box, box_id = box_id(parent or stop, anchor or box),
     example = (anchor or box).example or (parent or stop).example,
     command = command("fill " .. id),
@@ -650,7 +675,7 @@ function M.explain_range(selection, context, action)
     end
   end
   started(("Generating explanation for %s:%d-%d…"):format(selection.file, selection.start, selection["end"]))
-  conversation.send(s.origin, prompt, action or "stay", function(ok, err)
+  deliver(prompt, action or "stay", function(ok, err)
     if not ok then
       request.error = tostring(err)
       if request.placeholder then
@@ -751,12 +776,13 @@ function M.explain_symbol(context, reason, call)
     call = true, enter = true, lookup = context, snapshot = stops.snapshot(s.stops) }
   s.pending[id], s.awaiting, s.lookup = request, id, nil
   local prompt = requests.symbol({
+    tour = tour_path(),
     root = s.root, context = context, reason = reason, box_id = box_id(context.stop, context.box),
     command = command("fill " .. id),
   })
   request.prompt = prompt
   started("Starting agent lookup for " .. context.expression .. "…")
-  conversation.send(s.origin, prompt, "stay", function(ok, err)
+  deliver(prompt, "stay", function(ok, err)
     if not ok and s.pending[id] == request then
       s.pending[id] = nil
       call.placeholder, call.note = nil, "Symbol lookup failed: " .. tostring(err)
@@ -831,6 +857,7 @@ function M.explain_location(location, call, inspect)
   s.pending[id] = request
   if request.enter then s.awaiting = id end
   local prompt = requests.definition({
+    tour = tour_path(),
     root = s.root, stop = stop, box = box, box_id = box_id(stop, box),
     target = request.placeholder, path = path, line = line, same = same,
     definition_box = definition_box, target_id = same and box_id(stop, definition_box) or nil,
@@ -839,7 +866,7 @@ function M.explain_location(location, call, inspect)
   request.snapshot = stops.snapshot(s.stops)
   request.prompt = prompt
   started(same and "Refining explanation…" or ("Generating definition explanation for " .. vim.fs.basename(path) .. "…"))
-  conversation.send(s.origin, prompt, "stay", function(ok, err)
+  deliver(prompt, "stay", function(ok, err)
     if not ok then
       request.error = tostring(err)
       if request.placeholder then

@@ -143,7 +143,7 @@ class RPCIntegrationTests(unittest.TestCase):
         self.assertNotEqual(first['id'], second['id'])
         listed = json.loads(self.run_cli('saved', 'list', '--limit', '100').stdout)
         self.assertIn(first['id'], [item['id'] for item in listed['tours']])
-        cli.rpc(address, 'require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end')
+        cli.rpc(address, 'require("code-tour.conversation").deliver=function(_,_,_,_,cb) cb(true) end')
         # Unchanged unchecked prose is reused by default; nothing is requested.
         reused = json.loads(self.run_cli('saved', 'open', first['id'], '--pane', address).stdout)
         self.assertEqual(reused['reused_unverified'], 1)
@@ -225,7 +225,7 @@ class RPCIntegrationTests(unittest.TestCase):
         self.assertEqual(cli.rpc(self.addresses[1], 'return #require("tour").state().stops'), 0)
         self.run_cli('--pane', address, '--append', data=json.dumps([dict(file='source.lua', start=1, end=2, note='More')]))
         self.assertEqual(cli.rpc(address, 'return #require("tour").state().stops'), 2)
-        prompt = cli.rpc(address, '''require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end
+        prompt = cli.rpc(address, '''require("code-tour.conversation").deliver=function(_,_,_,_,cb) cb(true) end
             require("tour").next_snippet(-1)
             return require("tour").ask("Why addition?", "stay")''')
         self.assertIn('--answer 1.1', prompt)
@@ -254,7 +254,7 @@ class RPCIntegrationTests(unittest.TestCase):
         self.run_cli('--pane', address, 'source.lua:1-3')
         old = cli.rpc(address, 'return require("tour").state().id')
         self.run_cli('--pane', address, 'source.lua:1-3')
-        cli.rpc(address, '''require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end
+        cli.rpc(address, '''require("code-tour.conversation").deliver=function(_,_,_,_,cb) cb(true) end
           require("tour").ask("New tour question", "stay")''')
         self.run_cli('--answer', '1.1', '--pane', address, '--tour', old, data='Old reply', expected=1)
         self.assertIsNone(cli.rpc(address, 'return require("tour").state().stops[1].thread[1].answer'))
@@ -266,7 +266,7 @@ class RPCIntegrationTests(unittest.TestCase):
                 dict(file='source.lua', start=2, end=3, title='Lazy helper', lazy=True)]),
             dict(start=2, end=3, note='Continue')])]
         self.run_cli('--pane', address, data=json.dumps(data))
-        request_id = cli.rpc(address, '''require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end
+        request_id = cli.rpc(address, '''require("code-tour.conversation").deliver=function(_,_,_,_,cb) cb(true) end
           local tour=require("tour")
           tour.next_explanation(1)
           local id=tour.expand_call()
@@ -322,7 +322,7 @@ class RPCIntegrationTests(unittest.TestCase):
             dict(start=1, end=1, note='Dispatch event'), dict(start=2, end=2, note='Return')])]
         self.run_cli('--pane', address, data=json.dumps(payload))
         request_id = cli.rpc(address, '''local tour=require("tour")
-          require("code-tour.conversation").send=function(_,prompt,_,cb)
+          require("code-tour.conversation").deliver=function(_,_,prompt,_,cb)
             _G.tour_lookup_prompt=prompt; cb(true)
           end
           _G.tour_original_clients=vim.lsp.get_clients
@@ -333,8 +333,8 @@ class RPCIntegrationTests(unittest.TestCase):
           assert(vim.wait(1000,function() return next(tour.state().pending)~=nil end,1))
           return next(tour.state().pending)''')
         prompt = cli.rpc(address, 'return _G.tour_lookup_prompt')
-        self.assertIn('Call expression: handlerStack.bubbleEvent', prompt)
-        self.assertIn('Dispatch event', prompt)
+        self.assertIn('Call: handlerStack.bubbleEvent', prompt)
+        self.assertIn('tour: ', prompt)
         result = self.run_cli('--fill', request_id, '--pane', address,
                               data=json.dumps(dict(unresolved='Implementation is supplied by the runtime')))
         self.assertTrue(json.loads(result.stdout)['unresolved'])
@@ -351,7 +351,7 @@ class RPCIntegrationTests(unittest.TestCase):
     def test_selected_code_example_survives_rpc_fill(self):
         address = self.addresses[0]
         self.run_cli('--pane', address, 'source.lua:1-3')
-        request_id = cli.rpc(address, '''require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end
+        request_id = cli.rpc(address, '''require("code-tour.conversation").deliver=function(_,_,_,_,cb) cb(true) end
           local tour=require("tour")
           local selection=require("code-tour.selection").capture(tour.state(), {start=2,["end"]=3})
           local id=tour.explain_range(selection, "Show an example with input x = 1")
@@ -375,7 +375,7 @@ class RPCIntegrationTests(unittest.TestCase):
             subprocess.run(args, cwd=self.root, env=self.env, check=True, capture_output=True)
         file.write_text('local a = 2\nreturn a\n')
         self.run_cli('--pane', address, 'diff.lua:1-2')
-        request_id = cli.rpc(address, '''require("code-tour.conversation").send=function(_,_,_,cb) cb(true) end
+        request_id = cli.rpc(address, '''require("code-tour.conversation").deliver=function(_,_,_,_,cb) cb(true) end
           local tour=require("tour")
           local selection=require("code-tour.selection").capture(tour.state(), {start=1,["end"]=1})
           local id=tour.explain_range(selection, "Show the diff against HEAD")

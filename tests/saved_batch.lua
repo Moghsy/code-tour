@@ -10,7 +10,7 @@ vim.env.XDG_DATA_HOME = root .. "/data"
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
 local sent = {}
-require("code-tour.conversation").send = function(_, prompt, action, callback)
+require("code-tour.conversation").deliver = function(_, _root, prompt, action, callback)
   sent[#sent + 1] = { prompt = prompt, action = action }
   callback(true)
 end
@@ -97,7 +97,7 @@ local function run()
   local changed = tour.open_saved(first.id)
   local request = active()
   check(changed.reused_unverified == 1 and #request.items == 3, "One batch carries every changed box")
-  check(sent[#sent].prompt:find("[code-tour saved regeneration batch]", 1, true), "Batch prompt is used")
+  check(sent[#sent].prompt:find("[code-tour saved regeneration batch] tour: ", 1, true), "Batch prompt is used")
   check(select(2, sent[#sent].prompt:gsub("## Box: ", "")) == 3, "Prompt lists each box once")
   check(not sent[#sent].prompt:find("Authored", 1, true), "Batch prompt omits old prose")
 
@@ -139,7 +139,7 @@ local function run()
   tour.fill(split.id, { stop_for(split.items[1]), stop_for(split.items[2]) })
   check(active() and #active().items == 1, "Remaining boxes follow in the next batch")
   local single = active()
-  check(single.entry and sent[#sent].prompt:find("[code-tour saved regeneration]\n", 1, true), "Singletons keep the one-box contract")
+  check(single.entry and sent[#sent].prompt:find("[code-tour saved regeneration] tour: ", 1, true), "Singletons keep the one-box contract")
   local one = stop_for(single)
   one.box = nil
   check(tour.fill(single.id, { one }).box == single.entry.id, "Singleton reply needs no box ID")

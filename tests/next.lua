@@ -3,7 +3,7 @@ vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
 local sent = 0
-require("code-tour.conversation").send = function(_, _, _, callback)
+require("code-tour.conversation").deliver = function(_, _root, _, _, callback)
   sent = sent + 1
   callback(true)
 end

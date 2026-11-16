@@ -216,6 +216,20 @@ def origin(args, root):
     return result
 
 
+def tour_file(args, data):
+    """Keep the authored tour under the temp directory so requests can cite its path."""
+    base = Path(tempfile.gettempdir()).resolve()
+    if args.file:
+        path = Path(args.file).resolve()
+        if path.is_relative_to(base):
+            return str(path)
+    directory = base / f'code-tour-{os.getuid()}'
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / (hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16] + '.json')
+    path.write_text(json.dumps(data, indent=2))
+    return str(path)
+
+
 def read_stops(args):
     if args.ranges:
         result = []
@@ -448,7 +462,8 @@ def main(argv=None):
         result = deliver(target, 'fill', [args.fill, data, placement], args.tour)
     else:
         opts = dict(root=str(root), append=args.append, review=args.review, base=args.base,
-                    origin=origin(args, root), cli=str(Path(__file__).resolve()))
+                    origin=origin(args, root), cli=str(Path(__file__).resolve()),
+                    tour_file=None if data is None or args.append else tour_file(args, data))
         opts = {key: value for key, value in opts.items() if value is not None}
         result = rpc(target['address'], 'return require("tour").show(...)', [data, opts], timeout=15)
     remember(key, target)

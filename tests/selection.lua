@@ -5,7 +5,7 @@ vim.g.mapleader = " "
 -- These checks exercise selection/UI/fill behavior without opening an RPC socket.
 require("code-tour.instance").register = function() end
 local sent = {}
-require("code-tour.conversation").send = function(_, prompt, action, callback)
+require("code-tour.conversation").deliver = function(_, _root, prompt, action, callback)
   sent[#sent + 1] = { prompt = prompt, action = action }
   callback(true)
 end
@@ -53,12 +53,8 @@ local function test()
     #state().stops == 2 and state().pending[id].into == state().stops[1].parts[1],
     "Selection should attach to its containing box"
   )
-  check(
-    prompt:find("No example was requested. Omit example/values.", 1, true),
-    "Ordinary requests must opt out of examples"
-  )
-  check(prompt:find("Make subpart explanations detailed", 1, true)
-    and prompt:find("Keep note text general", 1, true), "Requests call for detailed general explanations")
+  check(not prompt:find("Example context:", 1, true) and prompt:find("tour: ", 1, true),
+    "Ordinary requests carry no example and cite the tour file")
   check(
     prompt:find("code.lua:2-3", 1, true) and prompt:find("local value = 2", 1, true),
     "Request must contain selected code"
@@ -89,8 +85,7 @@ local function test()
     sent[#sent].prompt:find("Please show an example for input value = 6\nand trace how it changes.", 1, true),
     "Extra context must reach the request"
   )
-  check(sent[#sent].prompt:find("Annotate every value-producing executed line", 1, true)
-    and not sent[#sent].prompt:find("EVERY source line", 1, true), "Example requests annotate meaningful results rather than every line")
+  check(sent[#sent].prompt:find("Reply: ", 1, true), "Example requests keep their reply command")
   local example = stop(6, 7, { part(6, 6), part(7, 7) })
   example.example = { input = "value = 6", output = "value = 7", values = { [8] = "outside selection" } }
   check(not pcall(tour.fill, selection_id, { example }), "Example annotations must still stay inside the snippet")
@@ -167,7 +162,7 @@ local function test()
 
   tour.explain_with_context(range(8, 9))
   submit_context("")
-  check(sent[#sent].prompt:find("No example was requested", 1, true), "Extra context may be blank")
+  check(not sent[#sent].prompt:find("Extra context:", 1, true), "Extra context may be blank")
   local stale = tour.explain(range(8, 9))
   vim.api.nvim_buf_set_lines(buf, 7, 8, false, { "local changed = true" })
   check(not pcall(tour.fill, stale, { stop(8, 9) }), "Changed source must not receive an explanation for stale code")

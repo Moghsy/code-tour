@@ -594,8 +594,8 @@ dispatch = function(state)
   )
   local requests = require("code-tour.requests")
   local command = plan.hooks.command(id)
-  local prompt = #items == 1 and requests.saved({ entry = items[1].entry, capture = items[1].capture, command = command })
-    or requests.saved_batch({ items = items, command = command })
+  local prompt = #items == 1 and requests.saved({ entry = items[1].entry, capture = items[1].capture, command = command, tour = plan.hooks.tour() })
+    or requests.saved_batch({ items = items, command = command, tour = plan.hooks.tour() })
   request.prompt = prompt
   local ok, failure = pcall(plan.hooks.send, prompt, function(sent, message)
     if not sent then

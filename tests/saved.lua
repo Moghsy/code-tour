@@ -8,7 +8,7 @@ vim.env.XDG_DATA_HOME = root .. "/data"
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
 local sent, fail_delivery = {}, false
-require("code-tour.conversation").send = function(_, prompt, action, callback)
+require("code-tour.conversation").deliver = function(_, _root, prompt, action, callback)
   sent[#sent + 1] = { prompt = prompt, action = action }
   callback(not fail_delivery, fail_delivery and "transport unavailable" or nil)
 end

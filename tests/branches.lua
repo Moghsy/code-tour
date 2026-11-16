@@ -9,7 +9,7 @@ for i = 1, 100 do lines[i] = "local value" .. i .. " = " .. i end
 for _, file in ipairs({ "a.lua", "b.lua", "c.lua" }) do vim.fn.writefile(lines, root .. "/" .. file) end
 local tour, model = require("tour"), require("code-tour.stops")
 local sent, fail = {}, false
-require("code-tour.conversation").send = function(_, prompt, _, callback)
+require("code-tour.conversation").deliver = function(_, _root, prompt, _, callback)
   sent[#sent + 1] = prompt
   callback(not fail, fail and "Test delivery failure" or nil)
 end
@@ -72,7 +72,7 @@ local function test()
   tour.ask("Keep this Q&A", "stay")
   local calls = model.calls(state().stops, caller)
   local first, prompt = tour.expand_call(calls[1])
-  check(prompt:find("Keep this expansion shallow", 1, true), "Lazy prompt defers deeper callees")
+  check(prompt:find("[code-tour definition] tour: ", 1, true), "Definition prompt cites the tour file and no rules")
   local second = tour.expand_call(calls[2])
   check(first ~= second and state().pending[first] and state().pending[second], "Requests stay independent")
   local result = tour.fill(first, { stop("b.lua", 20, 30, "First ready") })

@@ -2,7 +2,7 @@ local plugin = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
-require("code-tour.conversation").send = function(_, _, _, callback) callback(true) end
+require("code-tour.conversation").deliver = function(_, _root, _, _, callback) callback(true) end
 local tour = require("tour")
 local root = vim.fn.tempname()
 vim.fn.mkdir(root, "p")
@@ -39,10 +39,11 @@ end
 local function compact(prompt)
   check(not prompt:find("UNRELATED", 1, true) and not prompt:find("Numbered outline", 1, true), "Unrelated tour notes and full outline stay local")
   check(not prompt:find("OUTPUT_NOISE_BEFORE", 1, true) and not prompt:find("OUTPUT_NOISE_AFTER", 1, true), "Only the relevant example values accompany this request")
-  check(contains_once(prompt, lines[5]), "The selected call source is sent once")
+  check(contains_once(prompt, "source.js:5"), "The call site is cited once")
   check(prompt:find("--fill ", 1, true) and prompt:find("--pane ", 1, true)
     and prompt:find("--tour " .. tour.state().id, 1, true), "Compact prompts retain their exact delivery identity")
-  check(#prompt < 2200, "A simple explanation request stays below 2.2 KB: " .. #prompt)
+  check(prompt:find("tour: ", 1, true) and not prompt:find("Do not edit source", 1, true), "Requests cite the tour file instead of repeating instructions")
+  check(#prompt < 1500, "A simple explanation request stays below 2.2 KB: " .. #prompt)
 end
 local function test()
   tour.setup({ smooth_scroll = false })

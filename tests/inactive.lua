@@ -2,7 +2,7 @@ local plugin = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 45, 110
 require("code-tour.instance").register = function() end
-require("code-tour.conversation").send = function(_, _, _, cb) cb(true) end
+require("code-tour.conversation").deliver = function(_, _root, _, _, cb) cb(true) end
 local tour, view = require("tour"), require("code-tour.tour-view")
 local root = vim.fn.tempname()
 vim.fn.mkdir(root, "p")

@@ -3,7 +3,7 @@ vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
 local sent, fail = {}, false
-require("code-tour.conversation").send = function(_, prompt, _, callback)
+require("code-tour.conversation").deliver = function(_, _root, prompt, _, callback)
   sent[#sent + 1] = prompt
   callback(not fail, fail and "Test delivery failure" or nil)
 end

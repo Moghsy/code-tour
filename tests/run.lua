@@ -13,7 +13,7 @@ vim.fn.writefile(lines, root .. "/definition.lua")
 local tour = require("tour")
 local model = require("code-tour.stops")
 local captured = {}
-require("code-tour.conversation").send = function(_, prompt, action, callback)
+require("code-tour.conversation").deliver = function(_, _root, prompt, action, callback)
   captured[#captured + 1] = { prompt = prompt, action = action }
   callback(true)
 end

@@ -2,7 +2,7 @@ local plugin = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 50, 150
 require("code-tour.instance").register = function() end
-require("code-tour.conversation").send = function(_, _, _, cb)
+require("code-tour.conversation").deliver = function(_, _root, _, _, cb)
   cb(true)
 end
 local tour = require("tour")

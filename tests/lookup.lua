@@ -17,7 +17,7 @@ local original_clients, original_parser, original_notify = vim.lsp.get_clients, 
 vim.lsp.get_clients = function() return clients end
 vim.treesitter.get_parser = function() error("No local parser") end
 vim.notify = function(text) notices[#notices + 1] = text end
-require("code-tour.conversation").send = function(origin, prompt, action, callback)
+require("code-tour.conversation").deliver = function(origin, _root, prompt, action, callback)
   sent[#sent + 1] = { origin = origin, prompt = prompt, action = action }
   callback(not delivery_failed, delivery_failed and "Delivery failed" or nil)
 end
@@ -60,10 +60,10 @@ local function test()
   local before = #sent
   local id, prompt = tour.expand_call()
   check(id and state().pending[id].lookup and #sent == before + 1, "No provider/parser falls back to the agent")
-  check(prompt:find("Symbol under cursor: bubbleEvent", 1, true)
-    and prompt:find("Call expression: handlerStack.bubbleEvent", 1, true), "Prompt identifies the symbol and receiver")
-  check(prompt:find(root .. "/caller.lua:2", 1, true) and prompt:find(lines[2], 1, true), "Prompt contains exact call-site path, line and arguments")
-  check(prompt:find("Dispatch the event", 1, true) and prompt:find("Project root: " .. root, 1, true), "Prompt includes explanation and project context")
+  check(prompt:find("Symbol: bubbleEvent", 1, true)
+    and prompt:find("Call: handlerStack.bubbleEvent", 1, true), "Prompt identifies the symbol and receiver")
+  check(prompt:find(root .. "/caller.lua:2", 1, true), "Prompt contains exact call-site path and line")
+  check(prompt:find("[code-tour symbol] tour: ", 1, true) and prompt:find("stop 1.", 1, true), "Prompt cites the tour file and stop")
   check(prompt:find("--fill " .. id, 1, true) and prompt:find("--tour " .. state().id, 1, true), "Prompt carries the exact fill request and tour identity")
   check(sent[#sent].origin.pane_id == "agent-pane" and sent[#sent].action == "stay", "Fallback goes to the original agent without focus changes")
   check(state().stop == 1 and state().box == 2 and badges() == 0, "Unresolved call leaves the caller selected and unbadged")
@@ -160,7 +160,7 @@ local function test()
   id, prompt = tour.expand_call()
   check(id and state().pending[id] and state().pending[id].lookup.expression == "KeyHandlerMode",
     "ad on a superclass resolves the class rather than the only prepared method")
-  check(#sent == before + 1 and state().stop == 1 and prompt:find("Symbol under cursor: KeyHandlerMode", 1, true),
+  check(#sent == before + 1 and state().stop == 1 and prompt:find("Symbol: KeyHandlerMode", 1, true),
     "The class request uses the originating conversation and preserves the caller")
   tour.fill(id, { { file = "base.js", start = 1, ["end"] = 3, title = "KeyHandlerMode", note = "Provide shared key handling." } })
   tour.return_to_caller()

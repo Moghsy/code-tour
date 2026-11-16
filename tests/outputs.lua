@@ -2,7 +2,7 @@ local plugin = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
-require("code-tour.conversation").send = function(_, _, _, callback) callback(true) end
+require("code-tour.conversation").deliver = function(_, _root, _, _, callback) callback(true) end
 local tour, view = require("tour"), require("code-tour.tour-view")
 local root = vim.fn.tempname()
 vim.fn.mkdir(root, "p")
@@ -35,13 +35,7 @@ local function annotations()
   return found
 end
 local function trace_rules(prompt)
-  check(prompt:find("Continue the existing example", 1, true), "Existing examples carry through generation without being requested again")
-  check(prompt:find("Annotate every value-producing executed line", 1, true)
-    and prompt:find("input is unchanged", 1, true), "Computed output remains required without input mutation")
-  check(prompt:find("Forwarded calls must show", 1, true)
-    and prompt:find("concrete return value", 1, true), "Forwarded call results must be shown on return lines")
-  check(not prompt:find("No example was requested", 1, true)
-    and not prompt:find("context only; omit examples", 1, true), "Active traces never receive instructions to discard examples")
+  check(prompt:find("Example context:", 1, true), "Existing examples carry through generation without being requested again")
 end
 local function test()
   tour.setup({ smooth_scroll = false })

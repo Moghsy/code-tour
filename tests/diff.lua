@@ -2,7 +2,7 @@ local plugin = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin)
 vim.o.lines, vim.o.columns = 50, 120
 require("code-tour.instance").register = function() end
-require("code-tour.conversation").send = function(_, _, _, cb)
+require("code-tour.conversation").deliver = function(_, _root, _, _, cb)
   cb(true)
 end
 local tour = require("tour")
@@ -126,7 +126,7 @@ local function test()
   tour.fill(one, { stop(6, 6) }, { review = true, base = "HEAD" })
   check(tour.state().stops[1].added[6], "Requested diff data must survive fill into an existing snippet")
   local two, prompt = request(3, 3)
-  check(prompt:find("append --review", 1, true), "Context requests must explain how to ask for diffs")
+  check(prompt:find("Extra context:", 1, true), "Context requests carry the extra context")
   tour.fill(two, { stop(3, 3) }, { review = true, base = "HEAD" })
   green, red = colors()
   check(

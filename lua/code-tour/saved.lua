@@ -213,7 +213,8 @@ function M.export(state, opts)
       or (old and old.evidence)
       or { status = "unverified", reason = M.UNCHECKED }
     -- Never rebind a withheld (edited, failed or pending) note to the current code.
-    if box._saved and box._saved.status ~= "ready" and box._saved.status ~= "unresolved" and evidence.status ~= "verified" then
+    if box._saved and box._saved.status == "source_changed"
+      or (box._saved and box._saved.status ~= "ready" and box._saved.status ~= "unresolved" and evidence.status ~= "verified") then
       evidence = { status = "unverified", reason = STALE }
     end
     if stop.old or stop.added or stop.removed or state.review then
@@ -641,7 +642,7 @@ local function accept_item(request, target, item)
   entry.model.note, entry.model.evidence, entry.model.locator =
     item.note, vim.deepcopy(capture.evidence), vim.deepcopy(capture.locator)
   entry.runtime.note, entry.runtime._evidence = item.note, vim.deepcopy(capture.evidence)
-  entry.status, entry.reason, entry.reused = "ready", nil, nil
+  entry.status, entry.reason, entry.reused, entry.because = "ready", nil, nil, nil
   entry.session_evidence = capture.evidence.status == "verified" and capture.evidence or nil
   entry.raw_freshness = capture.evidence.status ~= "verified" and capture.file_digest or nil
 end
@@ -714,7 +715,7 @@ function M.accept(state, request, payload, opts)
   end
   return result
 end
-function M.retry(state, box_id)
+function M.retry(state, box_id, linked)
   local plan = assert(state.saved, "No saved tour")
   local entry = assert(plan.by_id[box_id], "Unknown saved box")
   if entry.status == "queued" or entry.status == "generating" then
@@ -727,6 +728,15 @@ function M.retry(state, box_id)
   apply_range(entry, capture)
   entry.status = "queued"
   plan.queue[#plan.queue + 1] = entry
+  -- Ready or stale boxes that depend on this one are regenerated in the same round trip.
+  for _, link in ipairs(linked or {}) do
+    local other = plan.by_id[link.id]
+    if other and other ~= entry and (other.status == "ready" or other.status == "source_changed")
+      and other.runtime and other.buf and other.capture then
+      other.status, other.because = "queued", link.because .. " changed"
+      plan.queue[#plan.queue + 1] = other
+    end
+  end
   dispatch(state)
   return plan.active and plan.active.id
 end

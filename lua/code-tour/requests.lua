@@ -1,17 +1,29 @@
 -- Send only the context for this request. Full placement snapshots stay local.
 local M = {}
 
+-- Optional lines may be nil inside a table constructor; drop them before joining.
+local function join(lines)
+  local out = {}
+  for i = 1, table.maxn(lines) do
+    if lines[i] ~= nil then
+      out[#out + 1] = lines[i]
+    end
+  end
+  return table.concat(out, "\n")
+end
+
 function M.saved(args)
   local entry, capture = args.entry, args.capture
   local first, last = require("code-tour.source").lines(capture.range)
-  return table.concat({
+  return join({
     "[code-tour saved regeneration] tour: " .. args.tour,
     "Project root: " .. entry.root,
+    entry.because and ("Linked: update because " .. entry.because) or nil,
     "Box: " .. entry.id .. " (" .. entry.role .. ")",
     ("%s:%d-%d\nExact byte range (zero-based, exclusive end): %s\n```\n%s\n```")
       :format(entry.path, first, last, vim.json.encode(capture.range), capture.text),
     "Reply: " .. args.command,
-  }, "\n")
+  })
 end
 
 -- Several queued saved boxes in one round trip; each reply stop names its box.
@@ -26,14 +38,16 @@ function M.saved_batch(args)
   for _, item in ipairs(items) do
     local entry, capture = item.entry, item.capture
     local first, last = lines_of(capture.range)
-    lines[#lines + 1] = ("\n## Box: %s (%s)\n%s:%d-%d\nExact byte range (zero-based, exclusive end): %s\n```\n%s\n```")
-      :format(entry.id, entry.role, entry.path, first, last, vim.json.encode(capture.range), capture.text)
+    lines[#lines + 1] = ("\n## Box: %s (%s)\n%s:%d-%d\n%sExact byte range (zero-based, exclusive end): %s\n```\n%s\n```")
+      :format(entry.id, entry.role, entry.path, first, last,
+        entry.because and ("Linked: update because " .. entry.because .. "\n") or "",
+        vim.json.encode(capture.range), capture.text)
   end
   vim.list_extend(lines, {
     "",
     "Reply: " .. args.command,
   })
-  return table.concat(lines, "\n")
+  return join(lines)
 end
 
 -- The concrete input plus values around the requested call are enough to carry
@@ -55,9 +69,12 @@ local function example_text(example, first, last, previous)
   return "Example context: " .. vim.json.encode(result)
 end
 
-local function reply(lines, command)
+local function reply(lines, command, stale)
+  if stale then
+    table.insert(lines, 2, stale)
+  end
   lines[#lines + 1] = "Reply: " .. command
-  return table.concat(lines, "\n")
+  return join(lines)
 end
 
 function M.selection(args)
@@ -72,7 +89,7 @@ function M.selection(args)
   if args.context and args.context:find("%S") then lines[#lines + 1] = "Extra context: " .. args.context end
   local example = example_text(args.example, selection.start, selection["end"])
   if example then lines[#lines + 1] = example end
-  return reply(lines, args.command)
+  return reply(lines, args.command, args.stale)
 end
 
 function M.symbol(args)
@@ -86,7 +103,7 @@ function M.symbol(args)
   }
   local trace = example_text(example, context.callsite.start, context.callsite["end"], true)
   if trace then lines[#lines + 1] = trace end
-  return reply(lines, args.command)
+  return reply(lines, args.command, args.stale)
 end
 
 function M.definition(args)
@@ -106,7 +123,7 @@ function M.definition(args)
   end
   local trace = example_text(example, first, last, true)
   if trace then lines[#lines + 1] = trace end
-  return reply(lines, args.command)
+  return reply(lines, args.command, args.stale)
 end
 
 return M

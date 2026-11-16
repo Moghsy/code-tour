@@ -479,6 +479,59 @@ local function deliver(prompt, action, callback)
   end)
 end
 
+-- Stale explanations (saved tours only) with the boxes that depend on them. The report
+-- file sits beside the tour file; requests cite it while anything is stale.
+local function stale_items()
+  return require("code-tour.stale").collect(s, function(stop, box)
+    local i, k = locate(stop, box)
+    return i and (i .. "." .. k) or "?"
+  end)
+end
+local function stale_report()
+  local stale = require("code-tour.stale")
+  local items = stale_items()
+  local path = tour_path() .. ".stale.json"
+  stale.write(items, path, tour_path())
+  return items, stale.summary(items, path)
+end
+local function stale_line()
+  if s.saved then
+    return (select(2, stale_report()))
+  end
+end
+local function warn_stale()
+  if not s.saved then
+    return
+  end
+  local items = stale_report()
+  local ids = {}
+  for _, item in ipairs(items) do
+    ids[#ids + 1] = item.id
+  end
+  local key = table.concat(ids, ",")
+  if key == s.stale_key then
+    return
+  end
+  s.stale_key = key
+  if #items == 0 then
+    return
+  end
+  local linked = {}
+  for _, item in ipairs(items) do
+    for _, link in ipairs(item.update_also) do
+      linked[link.id] = true
+    end
+  end
+  local names = vim.tbl_keys(linked)
+  table.sort(names)
+  notify(
+    "Stale explanation" .. (#items > 1 and "s" or "") .. ": " .. key
+      .. (#names > 0 and ("; linked boxes to refresh: " .. table.concat(names, ", ")) or "")
+      .. ". <leader>ae on a stale box regenerates it and its linked boxes.",
+    vim.log.levels.WARN
+  )
+end
+
 function M.save_saved(opts)
   opts = opts or {}
   library.check_directory(opts.library)
@@ -570,9 +623,10 @@ function M.ask(question, action, selected)
   end
   -- The originating agent built this tour and holds its notes, examples and
   -- earlier Q&A, so only send what identifies the box and the new question.
-  local prompt = ("[code-tour question] tour: %s\nstop %s · %s:%d-%d%s\nQuestion: %s\nReply: %s")
-    :format(tour_path(), id, stop.file, first, last, selected and " (selected lines)" or "", question,
-      command("answer " .. id))
+  local stale = stale_line()
+  local prompt = ("[code-tour question] tour: %s\nstop %s · %s:%d-%d%s\n%sQuestion: %s\nReply: %s")
+    :format(tour_path(), id, stop.file, first, last, selected and " (selected lines)" or "",
+      stale and (stale .. "\n") or "", question, command("answer " .. id))
   local turn = { question = question, box_id = id }
   box.thread[#box.thread + 1] = turn
   s.questions[id] = s.questions[id] or {}
@@ -657,7 +711,7 @@ function M.explain_range(selection, context, action)
   request.snapshot = stops.snapshot(s.stops)
   s.pending[id] = request
   local prompt = requests.selection({
-    tour = tour_path(), root = s.root, selection = selection, coverage = request.coverage, context = context,
+    tour = tour_path(), stale = stale_line(), root = s.root, selection = selection, coverage = request.coverage, context = context,
     box = anchor or box, box_id = box_id(parent or stop, anchor or box),
     example = (anchor or box).example or (parent or stop).example,
     command = command("fill " .. id),
@@ -697,7 +751,18 @@ function M.explain(selected, with_context)
   if not selected and not mode:match("^[vV\22]") and active_box and active_box._saved then
     saved.guard(active_box._saved)
     if active_box._saved.status ~= "ready" then
-      local id = saved.retry(s, active_box._saved.id)
+      -- Regenerate the stale box together with the explanations that depend on it.
+      local linked = {}
+      for _, item in ipairs(stale_items()) do
+        if item.saved_id == active_box._saved.id then
+          for _, link in ipairs(item.update_also) do
+            if link.saved_id then
+              linked[#linked + 1] = { id = link.saved_id, because = item.id .. " (" .. link.relation .. ")" }
+            end
+          end
+        end
+      end
+      local id = saved.retry(s, active_box._saved.id, linked)
       render(false)
       return id
     end
@@ -776,7 +841,7 @@ function M.explain_symbol(context, reason, call)
     call = true, enter = true, lookup = context, snapshot = stops.snapshot(s.stops) }
   s.pending[id], s.awaiting, s.lookup = request, id, nil
   local prompt = requests.symbol({
-    tour = tour_path(),
+    tour = tour_path(), stale = stale_line(),
     root = s.root, context = context, reason = reason, box_id = box_id(context.stop, context.box),
     command = command("fill " .. id),
   })
@@ -857,7 +922,7 @@ function M.explain_location(location, call, inspect)
   s.pending[id] = request
   if request.enter then s.awaiting = id end
   local prompt = requests.definition({
-    tour = tour_path(),
+    tour = tour_path(), stale = stale_line(),
     root = s.root, stop = stop, box = box, box_id = box_id(stop, box),
     target = request.placeholder, path = path, line = line, same = same,
     definition_box = definition_box, target_id = same and box_id(stop, definition_box) or nil,
@@ -1351,6 +1416,7 @@ function M.setup(opts)
     callback = function()
       if s.saved then
         saved.revalidate(s)
+        warn_stale()
         local active = current()
         if active and s.win and vim.api.nvim_win_is_valid(s.win) and vim.api.nvim_win_get_buf(s.win) == active.buf then
           render(false)

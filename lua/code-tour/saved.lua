@@ -610,6 +610,13 @@ end
 function M.start(state, plan, hooks)
   state.saved, plan.hooks = plan, hooks
   M.revalidate(state)
+  if state.standalone then
+    for _, entry in ipairs(plan.queue) do
+      unavailable(entry, "unavailable", "Source requires regeneration; disabled in standalone review")
+    end
+    plan.queue = {}
+    return
+  end
   dispatch(state)
 end
 -- Validate and apply one reply stop to the box it names.

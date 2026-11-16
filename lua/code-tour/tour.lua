@@ -45,7 +45,7 @@ local function locate(stop, box)
     end
   end
 end
-local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key -- defined once the graph helpers exist
+local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key, walk_steps, walk_index -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -388,6 +388,39 @@ function M.next_snippet(delta)
     return
   end
   clear_intent()
+  -- Walk mode: the same route as aj, one stop per snippet instead of per box. A
+  -- snippet's consecutive steps are one stop, and coming back to a caller after a
+  -- branch is a stop of its own, exactly as when walking box by box.
+  local steps = s.opts and s.opts.walk and walk_steps and walk_steps()
+  local at = steps and #steps > 0 and walk_index(steps)
+  if at then
+    local function run_start(i)
+      while i > 1 and steps[i - 1].stop == steps[i].stop do
+        i = i - 1
+      end
+      return i
+    end
+    local target = delta == 0 and run_start(at) or at
+    for _ = 1, math.abs(delta) do
+      if delta > 0 then
+        local j = target
+        while j <= #steps and steps[j].stop == steps[target].stop do
+          j = j + 1
+        end
+        target = j <= #steps and j or target
+      else
+        local before = run_start(target) - 1
+        target = before >= 1 and run_start(before) or run_start(target)
+      end
+    end
+    s.walk_index, s.frames = target, {}
+    position(steps[target])
+    reset_pages()
+    s.visible = true
+    render(true)
+    return
+  end
+  -- Off the walk (inside an optional branch): continue from the snippet it hangs off.
   local numbers = walk_numbers_for_nav and walk_numbers_for_nav()
   if numbers and #numbers.order > 0 then
     local here = numbers.owner[s.stop] or 0
@@ -603,7 +636,7 @@ end
 -- The graph drives reading order: depth-first over every edge, coming back to a
 -- snippet between its edges (see walk.lua). Returns false to fall back to the
 -- older route (e.g. when the graph has a cycle), after saying why.
-local function walk_steps()
+walk_steps = function()
   local plan, err = require("code-tour.walk").plan(build_graph())
   if not plan then
     return nil, err
@@ -620,7 +653,7 @@ local function walk_steps()
   return steps
 end
 -- Index of the step the reader is on: the remembered one when it still matches, else the first.
-local function walk_index(steps)
+walk_index = function(steps)
   local stop, box = current()
   local here = box_id_of(stop, box)
   if s.walk_index and steps[s.walk_index] and steps[s.walk_index].id == here then

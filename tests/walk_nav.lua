@@ -212,6 +212,30 @@ local function run()
   tour.next_explanation(-2)
   g = groups()
   check(g[10] == "CodeTourDoneCall" and g[21] == "CodeTourCurrentCall", "Walking back un-marks the later call, which is the next snippet again: " .. vim.inspect(g))
+  -- an walks the same route as aj, one stop per snippet: parts are skipped but the
+  -- returns to the calling snippet between branches are kept.
+  tour.show({ {
+    file = "main.lua", start = 1, ["end"] = 9, title = "Main", note = "Main flow",
+    parts = {
+      { start = 1, ["end"] = 3, note = "Setup" },
+      { start = 4, ["end"] = 6, note = "Calls B then C", calls = {
+        { file = "main.lua", start = 11, ["end"] = 12, title = "B", note = "B body", next = true,
+          parts = { { start = 11, ["end"] = 11, note = "b1" }, { start = 12, ["end"] = 12, note = "b2" } },
+          callsite = { start = 4, ["end"] = 4, symbol = "line" } },
+        { file = "main.lua", start = 14, ["end"] = 15, title = "C", note = "C body", next = true,
+          callsite = { start = 5, ["end"] = 5, symbol = "line" } },
+      } },
+      { start = 7, ["end"] = 9, note = "Finish" },
+    },
+  } }, { root = root .. "/app" })
+  local function an(delta, n)
+    local seen = {}
+    for _ = 1, n do tour.next_snippet(delta); seen[#seen + 1] = titles() end
+    return table.concat(seen, " ")
+  end
+  check(titles() == "Main.1", "Starts at the first snippet")
+  check(an(1, 5) == "B.1 Main.3 C.1 Main.4 Main.4", "an skips parts but returns to the caller between branches: " .. an(-1, 0))
+  check(an(-1, 5) == "C.1 Main.3 B.1 Main.1 Main.1", "ap retraces the same snippet-level route")
   -- The next snippet is green whichever box is focused, not only the box that makes the call.
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",

@@ -413,8 +413,9 @@ function M.next_snippet(delta)
         target = before >= 1 and run_start(before) or run_start(target)
       end
     end
+    -- Snippet navigation always lands on the overview; aj continues from the step.
     s.walk_index, s.frames = target, {}
-    position(steps[target])
+    position({ stop = steps[target].stop, box = stops.first_box(s.stops[steps[target].stop]) })
     reset_pages()
     s.visible = true
     render(true)
@@ -656,8 +657,16 @@ end
 walk_index = function(steps)
   local stop, box = current()
   local here = box_id_of(stop, box)
-  if s.walk_index and steps[s.walk_index] and steps[s.walk_index].id == here then
-    return s.walk_index
+  if s.walk_index and steps[s.walk_index] then
+    if steps[s.walk_index].id == here then
+      return s.walk_index
+    end
+    -- an leaves the reader on a snippet's overview while the walk position stays at
+    -- the step that brought them there (for a return, the box that made the call).
+    local si, ki = here:match("^(%d+)%.(%d+)$")
+    if tonumber(ki) == 1 and steps[s.walk_index].stop == tonumber(si) then
+      return s.walk_index
+    end
   end
   for n, step in ipairs(steps) do
     if step.id == here then

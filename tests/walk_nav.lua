@@ -234,8 +234,14 @@ local function run()
     return table.concat(seen, " ")
   end
   check(titles() == "Main.1", "Starts at the first snippet")
-  check(an(1, 5) == "B.1 Main.3 C.1 Main.4 Main.4", "an skips parts but returns to the caller between branches: " .. an(-1, 0))
-  check(an(-1, 5) == "C.1 Main.3 B.1 Main.1 Main.1", "ap retraces the same snippet-level route")
+  check(an(1, 5) == "B.1 Main.1 C.1 Main.1 Main.1", "an returns to the caller's overview between branches: " .. an(-1, 0))
+  check(an(-1, 5) == "C.1 Main.1 B.1 Main.1 Main.1", "ap retraces the same snippet-level route")
+  -- After an returns to the caller, aj carries on along the route instead of replaying it.
+  tour.next_snippet(1)
+  tour.next_snippet(1)
+  check(titles() == "Main.1", "Back on the caller")
+  tour.next_explanation(1)
+  check(titles() == "C.1", "aj continues with the next branch after a returned-to caller: " .. titles())
   -- The next snippet is green whichever box is focused, not only the box that makes the call.
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",

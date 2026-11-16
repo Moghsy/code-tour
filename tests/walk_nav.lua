@@ -113,7 +113,7 @@ local function run()
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(s2.stops[s2.stop].buf,
       vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })) do
       local g = mark[4].hl_group
-      if g == "CodeTourCurrentCall" or g == "CodeTourNextCall" or g == "CodeTourCall" then rows[mark[2] + 1] = g end
+      if g == "CodeTourCurrentCall" or g == "CodeTourNextCall" or g == "CodeTourCall" or g == "CodeTourDoneCall" then rows[mark[2] + 1] = g end
     end
     return rows
   end
@@ -121,8 +121,8 @@ local function run()
   tour.next_explanation(3)
   check(titles() == "Main.3", "Moved to the last part: " .. titles())
   local later = badge_rows()
-  check(later[2] and later[3] and later[2] ~= nil and later[3] == "CodeTourCall",
-    "Badges of calls in other parts stay visible: " .. vim.inspect(later))
+  check(later[2] == "CodeTourDoneCall" and later[3] == "CodeTourCall",
+    "Badges of calls in other parts stay visible, the finished gold call in its own colour: " .. vim.inspect(later))
   check(vim.deep_equal(vim.tbl_keys(later), vim.tbl_keys(overview_rows)) or #vim.tbl_keys(later) == #vim.tbl_keys(overview_rows),
     "The same calls are badged in every box")
   -- Several calls on one line are separate edges, walked in authored order.
@@ -191,7 +191,7 @@ local function run()
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(s.stops[s.stop].buf,
       vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })) do
       local group = mark[4].hl_group
-      if group == "CodeTourCurrentCall" or group == "CodeTourNextCall" or group == "CodeTourCall" then
+      if group == "CodeTourCurrentCall" or group == "CodeTourNextCall" or group == "CodeTourCall" or group == "CodeTourDoneCall" then
         found[mark[3]] = group
       end
     end
@@ -203,8 +203,15 @@ local function run()
     "Upcoming gold call is its own colour, other gold and optional calls keep theirs: " .. vim.inspect(g))
   tour.next_explanation(2)
   g = groups()
-  check(g[21] == "CodeTourCurrentCall" and g[10] == "CodeTourNextCall",
-    "After returning, the following gold call becomes the current one: " .. vim.inspect(g))
+  check(g[21] == "CodeTourCurrentCall" and g[10] == "CodeTourDoneCall" and g[33] == "CodeTourCall",
+    "After returning, the finished call is marked done and the following gold call is current: " .. vim.inspect(g))
+  tour.next_explanation(2)
+  g = groups()
+  check(g[21] == "CodeTourDoneCall" and g[10] == "CodeTourDoneCall",
+    "Every call we came out of is marked done: " .. vim.inspect(g))
+  tour.next_explanation(-2)
+  g = groups()
+  check(g[10] == "CodeTourDoneCall" and g[21] == "CodeTourNextCall", "Walking back un-marks the later call, which is gold again: " .. vim.inspect(g))
   -- Turning the option off restores the older route.
   tour.setup({ smooth_scroll = false, walk = false })
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Plain", note = "n",

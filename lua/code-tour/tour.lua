@@ -45,7 +45,7 @@ local function locate(stop, box)
     end
   end
 end
-local walk_move, walk_upcoming, walk_numbers_for_nav -- defined once the graph helpers exist
+local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -142,7 +142,10 @@ local function decorate(stop, box, layout)
       })
     end
   end
-  local upcoming = walk_upcoming and walk_upcoming(stop, box)
+  local upcoming, done = nil, {}
+  if walk_upcoming then
+    upcoming, done = walk_upcoming(stop, box)
+  end
   -- Call badges stay visible whichever box is focused: every prepared call of this
   -- snippet, and of the other snippets shown in the same buffer.
   for _, owner in ipairs(s.stops) do
@@ -158,7 +161,9 @@ local function decorate(stop, box, layout)
               and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
               and upcoming.callsite.start_col == site.start_col
           end
-          badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current)
+          local finished = s.opts and s.opts.walk and call.next == true and not current
+            and done[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
+          badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current, finished)
         end
       end
     end
@@ -657,20 +662,33 @@ walk_move = function(delta)
   position(steps[index])
   return true
 end
--- The edge the next press of aj will follow from this box, if any.
+-- The edge the next press of aj will follow from this box (if any), and the set of
+-- edges the walk has already finished, keyed by edge_key().
+edge_key = function(source, site)
+  return ("%s|%s|%s|%s"):format(source, site.symbol or "", site.start or "", site.start_col or "")
+end
 walk_upcoming = function(stop, box)
   if not (s.opts and s.opts.walk) then
-    return nil
+    return nil, {}
   end
   local steps = walk_steps()
   if not steps then
-    return nil
+    return nil, {}
   end
   local index = walk_index(steps)
+  local done = {}
+  -- Edges walked up to and including the current step: being inside a callee counts too.
+  for n = 1, index or 0 do
+    local via = steps[n].via
+    if steps[n].kind == "enter" and via and via.callsite then
+      done[edge_key(via.source, { symbol = via.symbol, start = via.callsite.start, start_col = via.callsite.start_col })] = true
+    end
+  end
   local following = index and steps[index + 1]
   if following and following.kind == "enter" and following.via and following.via.from_box == box_id_of(stop, box) then
-    return following.via
+    return following.via, done
   end
+  return nil, done
 end
 
 -- In walk mode snippets are numbered in the order the walk first reaches them.

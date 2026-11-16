@@ -45,7 +45,7 @@ local function locate(stop, box)
     end
   end
 end
-local walk_move -- defined once the graph helpers exist
+local walk_move, walk_upcoming -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -142,9 +142,20 @@ local function decorate(stop, box, layout)
       })
     end
   end
+  local upcoming = walk_upcoming and walk_upcoming(stop, box)
   for _, call in ipairs(stops.calls_in(s.stops, stop, box, true)) do
     local range = badge.range(stop.buf, call.callsite)
-    if range then badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next) end
+    if range then
+      local site = call.callsite
+      -- nil outside the walk (older labels); true for the edge aj follows next, else false.
+      local current
+      if s.opts and s.opts.walk then
+        current = upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
+          and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
+          and upcoming.callsite.start_col == site.start_col
+      end
+      badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current)
+    end
   end
   local example = box.example or stop.example
   for line, value in pairs((example or {}).values or {}) do
@@ -555,11 +566,10 @@ end
 -- The graph drives reading order: depth-first over every edge, coming back to a
 -- snippet between its edges (see walk.lua). Returns false to fall back to the
 -- older route (e.g. when the graph has a cycle), after saying why.
-walk_move = function(delta)
+local function walk_steps()
   local plan, err = require("code-tour.walk").plan(build_graph())
   if not plan then
-    notify(err, vim.log.levels.WARN)
-    return false
+    return nil, err
   end
   local steps = {}
   for _, step in ipairs(plan.steps) do
@@ -567,21 +577,47 @@ walk_move = function(delta)
     local stop = s.stops[tonumber(si)]
     local box = stop and stops.boxes(stop)[tonumber(ki)]
     if stop and box and stops.ready(stop) and not box._unlocated then
-      steps[#steps + 1] = { stop = tonumber(si), box = tonumber(ki), id = step.box }
+      steps[#steps + 1] = { stop = tonumber(si), box = tonumber(ki), id = step.box, kind = step.kind, via = step.via }
     end
+  end
+  return steps
+end
+-- Index of the step the reader is on: the remembered one when it still matches, else the first.
+local function walk_index(steps)
+  local stop, box = current()
+  local here = box_id_of(stop, box)
+  if s.walk_index and steps[s.walk_index] and steps[s.walk_index].id == here then
+    return s.walk_index
+  end
+  for n, step in ipairs(steps) do
+    if step.id == here then
+      return n
+    end
+  end
+end
+walk_move = function(delta)
+  local steps, err = walk_steps()
+  if not steps then
+    notify(err, vim.log.levels.WARN)
+    return false
   end
   if #steps == 0 then
     return false
   end
-  local stop, box = current()
-  local here = box_id_of(stop, box)
-  local index = s.walk_index and steps[s.walk_index] and steps[s.walk_index].id == here and s.walk_index or nil
-  for n, step in ipairs(steps) do
-    if not index and step.id == here then
-      index = n
+  -- A reader inside an optional branch (opened with ad) is off the walk: the older
+  -- route returns them to the box they entered from, which is on the walk.
+  local index = walk_index(steps)
+  if not index then
+    local stop = current()
+    local on_walk = false
+    for _, step in ipairs(steps) do
+      on_walk = on_walk or s.stops[step.stop] == stop
     end
+    if not on_walk then
+      return false
+    end
+    index = 0
   end
-  index = index or 0
   local direction = delta < 0 and -1 or 1
   for _ = 1, math.abs(delta) do
     index = math.max(1, math.min(#steps, index + direction))
@@ -589,6 +625,21 @@ walk_move = function(delta)
   s.walk_index, s.frames = index, {}
   position(steps[index])
   return true
+end
+-- The edge the next press of aj will follow from this box, if any.
+walk_upcoming = function(stop, box)
+  if not (s.opts and s.opts.walk) then
+    return nil
+  end
+  local steps = walk_steps()
+  if not steps then
+    return nil
+  end
+  local index = walk_index(steps)
+  local following = index and steps[index + 1]
+  if following and following.kind == "enter" and following.via and following.via.from_box == box_id_of(stop, box) then
+    return following.via
+  end
 end
 
 -- Write the tour graph (nodes = snippets, links = next/optional routes) and return its path.

@@ -67,16 +67,16 @@ local function run()
       { start = 4, ["end"] = 6, note = "Finish" },
     },
   } }, { root = root .. "/app" })
-  local expected = "Main.1 Main.2 B.1 Main.2 C.1 Main.3"
-  check(walk_through(5) == expected, "Walk visits each edge and returns between them: " .. walk_through(0))
+  local expected = "Main.1 Main.2 B.1 Main.3"
+  check(walk_through(3) == expected, "Only the gold callee is walked; the optional one waits: " .. expected)
   tour.next_explanation(1)
   check(titles() == "Main.3", "The end of the walk stays put")
   tour.next_explanation(-1)
-  check(titles() == "C.1", "Previous walks back up the route")
-  tour.next_explanation(-2)
-  check(titles() == "B.1", "Walking back passes through the return step")
-  tour.next_explanation(2)
-  check(titles() == "C.1", "Walking forward again repeats the same route")
+  check(titles() == "B.1", "Previous walks back up the route")
+  tour.next_explanation(-1)
+  check(titles() == "Main.2", "Walking back returns to the caller")
+  tour.next_explanation(1)
+  check(titles() == "B.1", "Walking forward again repeats the same route")
   tour.next_explanation(-5)
   check(titles() == "Main.1", "The start stays put when going back")
   -- Several calls on one line are separate edges, walked in authored order.
@@ -85,11 +85,11 @@ local function run()
   tour.show({ {
     file = "multi.lua", start = 1, ["end"] = 2, title = "Line", note = "One line, three calls",
     parts = { { start = 1, ["end"] = 2, note = "Sum", calls = {
-      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s",
+      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s", next = true,
         callsite = { start = 1, ["end"] = 1, start_col = 21, end_col = 30, symbol = "second" } },
-      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f",
+      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f", next = true,
         callsite = { start = 1, ["end"] = 1, start_col = 10, end_col = 18, symbol = "first" } },
-      { file = "multi.lua", start = 6, ["end"] = 6, title = "Third", note = "t",
+      { file = "multi.lua", start = 6, ["end"] = 6, title = "Third", note = "t", next = true,
         callsite = { start = 1, ["end"] = 1, start_col = 33, end_col = 41, symbol = "third" } },
     } } },
   } }, { root = root .. "/app" })
@@ -104,7 +104,7 @@ local function run()
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = { { start = 1, ["end"] = 3, note = "Calls B", calls = {
-      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", calls = {
+      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", next = true, calls = {
         { file = "main.lua", start = 1, ["end"] = 6, title = "Main again", note = "recursion", ref = true,
           callsite = { start = 8, ["end"] = 8, symbol = "main" } } },
         callsite = { start = 2, ["end"] = 2, symbol = "b" } } } },
@@ -115,18 +115,50 @@ local function run()
   tour.next_explanation(0)
   for _ = 1, 4 do tour.next_explanation(1); seen[#seen + 1] = titles() end
   check(table.concat(seen, " ") == "Main.2 B.1 Main.3 Main.3" and #notes == before, "Marked recursion walks without a cycle: " .. table.concat(seen, " "))
-  -- An unmarked cycle is reported and the older route is used.
+  -- Recursion needs no marking: the call back onto the path is a reference automatically.
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = { { start = 1, ["end"] = 3, note = "Calls B", calls = {
-      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", calls = {
-        { file = "main.lua", start = 1, ["end"] = 6, title = "Main again", note = "recursion",
+      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", next = true, calls = {
+        { file = "main.lua", start = 1, ["end"] = 6, title = "Main again", note = "recursion", next = true,
           callsite = { start = 8, ["end"] = 8, symbol = "main" } } },
         callsite = { start = 2, ["end"] = 2, symbol = "b" } } } },
       { start = 4, ["end"] = 6, note = "Finish" } },
   } }, { root = root .. "/app" })
+  seen = {}
+  for _ = 1, 4 do tour.next_explanation(1); seen[#seen + 1] = titles() end
+  check(table.concat(seen, " ") == "Main.2 B.1 Main.3 Main.3" and #notes == before, "Unmarked recursion walks without a warning: " .. table.concat(seen, " "))
+  -- The gold call the walk takes next gets its own colour; other gold calls keep theirs.
+  tour.show({ {
+    file = "multi.lua", start = 1, ["end"] = 2, title = "Line", note = "One line, three calls",
+    parts = { { start = 1, ["end"] = 2, note = "Sum", calls = {
+      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f", next = true,
+        callsite = { start = 1, ["end"] = 1, start_col = 10, end_col = 18, symbol = "first" } },
+      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s", next = true,
+        callsite = { start = 1, ["end"] = 1, start_col = 21, end_col = 30, symbol = "second" } },
+      { file = "multi.lua", start = 6, ["end"] = 6, title = "Third", note = "t",
+        callsite = { start = 1, ["end"] = 1, start_col = 33, end_col = 41, symbol = "third" } },
+    } } },
+  } }, { root = root .. "/app" })
+  local function groups()
+    local s, found = tour.state(), {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(s.stops[s.stop].buf,
+      vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })) do
+      local group = mark[4].hl_group
+      if group == "CodeTourCurrentCall" or group == "CodeTourNextCall" or group == "CodeTourCall" then
+        found[mark[3]] = group
+      end
+    end
+    return found
+  end
   tour.next_explanation(1)
-  check(#notes > before and notes[#notes]:find("cycle", 1, true), "Unmarked cycle is reported")
+  local g = groups()
+  check(g[10] == "CodeTourCurrentCall" and g[21] == "CodeTourNextCall" and g[33] == "CodeTourCall",
+    "Upcoming gold call is its own colour, other gold and optional calls keep theirs: " .. vim.inspect(g))
+  tour.next_explanation(2)
+  g = groups()
+  check(g[21] == "CodeTourCurrentCall" and g[10] == "CodeTourNextCall",
+    "After returning, the following gold call becomes the current one: " .. vim.inspect(g))
   -- Turning the option off restores the older route.
   tour.setup({ smooth_scroll = false, walk = false })
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Plain", note = "n",

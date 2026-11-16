@@ -1,17 +1,20 @@
--- Depth-first reading order over the tour graph (see graph.lua).
+-- Depth-first reading order over the tour graph (see graph.lua). The graph is a
+-- general directed graph (recursion makes cycles); the walk is a spanning tree
+-- of it, so every snippet is shown once and the reading order cannot loop.
+-- Only gold (`next`) edges are walked. Optional edges stay reader-initiated.
 --
--- plan(graph) validates that the tour is a DAG and returns a flat list of steps.
+-- plan(graph) returns a flat list of steps.
 -- Each step shows one box of one snippet. A snippet's boxes are read in order.
 -- Edges leave from the box that makes the call. Every edge is walked in turn and,
 -- when more edges remain on that box, a `return` step brings the reader back to
 -- it before the next edge. After the last edge there is nothing to choose, so the
 -- reader carries straight on with the next box (or finishes the snippet).
 --
--- An edge becomes a reference (never walked) when:
---   * it is marked `ref` (recursion the author already broke), or
+-- A gold edge becomes a reference (never walked) when:
+--   * it is marked `ref`, or
+--   * its target is on the current path (recursion or a loop), or
 --   * its target was already walked (a shared node in a diamond), or
 --   * its target is lazy (not explained yet).
--- An unmarked edge back to a snippet on the current path is a cycle: an error.
 local M = {}
 
 local MAX_DEPTH = 128
@@ -19,7 +22,7 @@ local MAX_DEPTH = 128
 local function out_edges(graph)
   local by_node = {}
   for index, link in ipairs(graph.links) do
-    if link.relation == "next" or link.relation == "optional" then
+    if link.relation == "next" then
       local list = by_node[link.source] or {}
       by_node[link.source] = list
       list[#list + 1] = { link = link, order = index }
@@ -28,7 +31,7 @@ local function out_edges(graph)
   return by_node
 end
 
--- Returns { steps = {...}, refs = {...} } or nil, error.
+-- Returns { steps = {...}, refs = {...} }, or nil, error when nested too deeply.
 -- step = { node, box, kind = "root" | "enter" | "box" | "return", via? }
 function M.plan(graph)
   local nodes = {}
@@ -80,16 +83,7 @@ function M.plan(graph)
           -- Not explained yet: nothing to show, and nothing to come back from.
           refs[#refs + 1] = { from = id, to = target, why = "lazy" }
         elseif state[target] == "active" then
-          local cycle = {}
-          local started
-          for _, step in ipairs(path) do
-            started = started or step == target
-            if started then
-              cycle[#cycle + 1] = nodes[step].label
-            end
-          end
-          cycle[#cycle + 1] = nodes[target].label
-          return nil, "Tour has a cycle: " .. table.concat(cycle, " → ") .. ". Mark the closing edge as ref."
+          refs[#refs + 1] = { from = id, to = target, why = "recursive" }
         elseif state[target] then
           refs[#refs + 1] = { from = id, to = target, why = "shared" }
         else
@@ -124,7 +118,7 @@ function M.plan(graph)
       end
       return true
     end
-    steps[#steps + 1] = { node = id, box = boxes[1].id, kind = kind, via = via and { source = via.source, relation = via.relation, symbol = via.symbol } or nil }
+    steps[#steps + 1] = { node = id, box = boxes[1].id, kind = kind, via = via and { source = via.source, relation = via.relation, symbol = via.symbol, from_box = via.from_box, callsite = via.callsite } or nil }
     for k, box in ipairs(boxes) do
       if k > 1 then
         steps[#steps + 1] = { node = id, box = box.id, kind = "box" }
@@ -147,26 +141,47 @@ function M.plan(graph)
     return true
   end
 
-  -- Start at each snippet no walked edge reaches, in authored order.
-  local targeted = {}
-  for _, list in pairs(edges) do
-    for _, item in ipairs(list) do
-      if not item.link.ref then
-        targeted[item.link.target] = true
+  -- Start at each snippet no call reaches, in authored order. Snippets reached
+  -- only by optional calls are the reader's to open, never roots.
+  local gold, called = {}, {}
+  for _, link in ipairs(graph.links) do
+    if (link.via == "call" or link.via == "sequence") and not link.ref then
+      called[link.target] = true
+      if link.relation == "next" then
+        gold[link.target] = true
       end
     end
   end
   for _, node in ipairs(graph.nodes) do
-    if not state[node.id] and not targeted[node.id] and not node.lazy then
+    if not state[node.id] and not called[node.id] and not node.lazy then
       local ok, err = visit(node.id, "root")
       if not ok then
         return nil, err
       end
     end
   end
-  -- Anything left is only reachable through a cycle of unmarked edges.
+  -- Everything below an optional call belongs to the reader until they open it.
+  local owned, queue = {}, {}
+  for _, link in ipairs(graph.links) do
+    if link.via == "call" and link.relation == "optional" and not state[link.target] and not owned[link.target] then
+      owned[link.target] = true
+      queue[#queue + 1] = link.target
+    end
+  end
+  local head = 1
+  while head <= #queue do
+    local id = queue[head]
+    head = head + 1
+    for _, link in ipairs(graph.links) do
+      if link.via == "call" and link.source == id and not owned[link.target] and not state[link.target] then
+        owned[link.target] = true
+        queue[#queue + 1] = link.target
+      end
+    end
+  end
+  -- Left over: members of a loop of gold edges with no entry from outside.
   for _, node in ipairs(graph.nodes) do
-    if not state[node.id] and not node.lazy then
+    if not state[node.id] and gold[node.id] and not owned[node.id] and not node.lazy then
       local ok, err = visit(node.id, "root")
       if not ok then
         return nil, err

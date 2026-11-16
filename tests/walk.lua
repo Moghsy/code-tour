@@ -69,14 +69,22 @@ plan = assert(plan_of(
 ))
 check(trace(plan) == "a1 b1 c1", "Claimed sibling leaves no dangling return: " .. trace(plan))
 
--- Cycles are rejected by name unless the closing edge is marked ref.
+-- Cycles are not errors: the edge back onto the path becomes a reference.
 local cyclic = { node("A", "a1"), node("B", "b1") }
-local bad, err = plan_of(cyclic, { edge("A", "B", "a1"), edge("B", "A", "b1") })
-check(bad == nil and err:find("A → B → A", 1, true), "Cycle error names the loop: " .. tostring(err))
+plan = assert(plan_of(cyclic, { edge("A", "B", "a1"), edge("B", "A", "b1") }))
+check(trace(plan) == "a1 b1" and plan.refs[1].why == "recursive" and plan.refs[1].to == "A", "Recursion is a reference: " .. trace(plan))
 plan = assert(plan_of(cyclic, { edge("A", "B", "a1"), edge("B", "A", "b1", { ref = true }) }))
-check(trace(plan) == "a1 b1" and plan.refs[1].why == "marked", "Marked recursion is a reference")
-local self_loop = select(2, plan_of({ node("A", "a1") }, { edge("A", "A", "a1") }))
-check(self_loop and self_loop:find("cycle", 1, true), "Self-recursion must be marked ref")
+check(trace(plan) == "a1 b1" and plan.refs[1].why == "marked", "An author-marked ref stays a marked reference")
+plan = assert(plan_of({ node("A", "a1") }, { edge("A", "A", "a1") }))
+check(trace(plan) == "a1" and plan.refs[1].why == "recursive", "Self-recursion is a reference")
+-- A loop with no entry from outside still gets read once, from its first snippet.
+plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1") },
+  { edge("A", "B", "a1"), edge("B", "C", "b1"), edge("C", "A", "c1") }))
+check(trace(plan) == "a1 b1 c1" and #plan.refs == 1, "A closed loop is walked once: " .. trace(plan))
+-- Mutual recursion below a root.
+plan = assert(plan_of({ node("R", "r1"), node("A", "a1"), node("B", "b1") },
+  { edge("R", "A", "r1"), edge("A", "B", "a1"), edge("B", "A", "b1") }))
+check(trace(plan) == "r1 a1 b1" and plan.refs[1].why == "recursive", "Mutual recursion terminates: " .. trace(plan))
 
 -- Several roots are walked in authored order.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1") }, {}))
@@ -91,8 +99,12 @@ check(cursor:next().box == "b1" and cursor:next().kind == "return" and cursor:ne
 check(cursor:next() == nil and cursor:prev().kind == "return" and cursor:prev().box == "b1", "Cursor walks back up")
 check(cursor:seek("C").box == "c1" and cursor.index == 4, "Cursor can seek a node")
 
--- Optional edges are walked too, in authored order.
+-- Optional edges are never walked automatically, and their snippets are not roots.
+plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1"), node("O", "o1") },
+  { edge("A", "B", "a1", { relation = "optional" }), edge("A", "C", "a1"), edge("B", "O", "b1", { relation = "optional" }) }))
+check(trace(plan) == "a1 c1", "Only gold edges are walked: " .. trace(plan))
+-- A gold edge from an optional snippet is still part of that snippet's own branch only.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1") },
-  { edge("A", "B", "a1", { relation = "optional" }), edge("A", "C", "a1") }))
-check(trace(plan) == "a1 b1 a1^ c1", "Optional edges are walked as well")
+  { edge("A", "B", "a1", { relation = "optional" }), edge("B", "C", "b1") }))
+check(trace(plan) == "a1", "Branches below an optional snippet wait for the reader: " .. trace(plan))
 print("PASS: " .. checks .. " tour walk checks")

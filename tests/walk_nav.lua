@@ -95,6 +95,36 @@ local function run()
   check(titles() == "B.1", "Walking forward again repeats the same route")
   tour.next_explanation(-5)
   check(titles() == "Main.1", "The start stays put when going back")
+  -- Call badges stay visible when another part of the snippet is focused.
+  tour.show({ {
+    file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
+    parts = {
+      { start = 1, ["end"] = 3, note = "Calls B then C", calls = {
+        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+          callsite = { start = 2, ["end"] = 2, symbol = "line" } },
+        { file = "main.lua", start = 11, ["end"] = 12, title = "C", note = "C body",
+          callsite = { start = 3, ["end"] = 3, symbol = "line" } },
+      } },
+      { start = 4, ["end"] = 6, note = "Finish" },
+    },
+  } }, { root = root .. "/app" })
+  local function badge_rows()
+    local s2, rows = tour.state(), {}
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(s2.stops[s2.stop].buf,
+      vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })) do
+      local g = mark[4].hl_group
+      if g == "CodeTourCurrentCall" or g == "CodeTourNextCall" or g == "CodeTourCall" then rows[mark[2] + 1] = g end
+    end
+    return rows
+  end
+  local overview_rows = badge_rows()
+  tour.next_explanation(3)
+  check(titles() == "Main.3", "Moved to the last part: " .. titles())
+  local later = badge_rows()
+  check(later[2] and later[3] and later[2] ~= nil and later[3] == "CodeTourCall",
+    "Badges of calls in other parts stay visible: " .. vim.inspect(later))
+  check(vim.deep_equal(vim.tbl_keys(later), vim.tbl_keys(overview_rows)) or #vim.tbl_keys(later) == #vim.tbl_keys(overview_rows),
+    "The same calls are badged in every box")
   -- Several calls on one line are separate edges, walked in authored order.
   vim.fn.writefile({ "local r = first(1) + second(2) + third(3)", "return r", "", "local function first() end",
     "local function second() end", "local function third() end" }, root .. "/app/multi.lua")

@@ -106,7 +106,7 @@ local function test()
     callsite = { start = 4, ["end"] = 4, symbol = "unknown" } }
   show(bubble(false), other)
   tour.next_explanation(1)
-  check(#badge_marks() == 0, "Calls outside the focused subpart are not badged")
+  check(#badge_marks() == 2, "Calls in other subparts stay badged")
   tour.next_explanation(1)
   check(#badge_marks() == 2, "All ready calls in one subpart are badged together")
   hover(4, "unknown")

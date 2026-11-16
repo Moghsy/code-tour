@@ -143,18 +143,24 @@ local function decorate(stop, box, layout)
     end
   end
   local upcoming = walk_upcoming and walk_upcoming(stop, box)
-  for _, call in ipairs(stops.calls_in(s.stops, stop, box, true)) do
-    local range = badge.range(stop.buf, call.callsite)
-    if range then
-      local site = call.callsite
-      -- nil outside the walk (older labels); true for the edge aj follows next, else false.
-      local current
-      if s.opts and s.opts.walk then
-        current = upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
-          and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
-          and upcoming.callsite.start_col == site.start_col
+  -- Call badges stay visible whichever box is focused: every prepared call of this
+  -- snippet, and of the other snippets shown in the same buffer.
+  for _, owner in ipairs(s.stops) do
+    if owner.buf == stop.buf and (owner == stop or stops.ready(owner)) then
+      for _, call in ipairs(stops.calls_in(s.stops, owner, owner, true)) do
+        local range = badge.range(stop.buf, call.callsite)
+        if range then
+          local site = call.callsite
+          -- nil outside the walk (older labels); true for the edge aj follows next, else false.
+          local current
+          if s.opts and s.opts.walk then
+            current = owner == stop and upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
+              and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
+              and upcoming.callsite.start_col == site.start_col
+          end
+          badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current)
+        end
       end
-      badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current)
     end
   end
   local example = box.example or stop.example

@@ -9,7 +9,8 @@
 --
 -- An edge becomes a reference (never walked) when:
 --   * it is marked `ref` (recursion the author already broke), or
---   * its target was already walked (a shared node in a diamond).
+--   * its target was already walked (a shared node in a diamond), or
+--   * its target is lazy (not explained yet).
 -- An unmarked edge back to a snippet on the current path is a cycle: an error.
 local M = {}
 
@@ -75,6 +76,9 @@ function M.plan(graph)
         local target = item.link.target
         if item.link.ref then
           refs[#refs + 1] = { from = id, to = target, why = "marked" }
+        elseif nodes[target] and nodes[target].lazy then
+          -- Not explained yet: nothing to show, and nothing to come back from.
+          refs[#refs + 1] = { from = id, to = target, why = "lazy" }
         elseif state[target] == "active" then
           local cycle = {}
           local started
@@ -153,7 +157,7 @@ function M.plan(graph)
     end
   end
   for _, node in ipairs(graph.nodes) do
-    if not state[node.id] and not targeted[node.id] then
+    if not state[node.id] and not targeted[node.id] and not node.lazy then
       local ok, err = visit(node.id, "root")
       if not ok then
         return nil, err
@@ -162,7 +166,7 @@ function M.plan(graph)
   end
   -- Anything left is only reachable through a cycle of unmarked edges.
   for _, node in ipairs(graph.nodes) do
-    if not state[node.id] then
+    if not state[node.id] and not node.lazy then
       local ok, err = visit(node.id, "root")
       if not ok then
         return nil, err

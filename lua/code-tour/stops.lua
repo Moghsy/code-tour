@@ -130,6 +130,8 @@ function M.normalize(input, root)
     assert(stop.next == nil or type(stop.next) == "boolean", "next must be a boolean")
     assert(not stop.next or parent_box, "Only a call branch can be next")
     assert(not stop.next or not stop.lazy, "Next calls require a prepared explanation")
+    assert(stop.ref == nil or type(stop.ref) == "boolean", "ref must be a boolean")
+    assert(not stop.ref or parent_box, "Only a call branch can be a ref")
     if stop.lazy then
       assert(not stop.parts or #stop.parts == 0, "Lazy calls must omit parts")
       assert(not stop.calls or #stop.calls == 0, "Lazy calls must omit nested calls")

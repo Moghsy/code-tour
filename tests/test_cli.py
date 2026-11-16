@@ -276,7 +276,8 @@ class RPCIntegrationTests(unittest.TestCase):
         self.assertTrue(json.loads(result.stdout)['navigate'])
         position = cli.rpc(address, '''local tour=require("tour"); tour.next_explanation(1)
           return {tour.state().stop, tour.state().box}''')
-        self.assertEqual(position, [1, 2])
+# The walk has no return step after a branch's last edge: it continues at the caller's next box.
+        self.assertEqual(position, [1, 3])
 
     def test_badge_background_is_red_in_rendered_cells_over_blue_focus(self):
         file = self.root / 'badge.lua'

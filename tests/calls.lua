@@ -57,7 +57,7 @@ local function hover(line, symbol)
   vim.api.nvim_win_set_cursor(state().win, { line, text:find(symbol, 1, true) - 1 })
 end
 local function test()
-  tour.setup({ smooth_scroll = false })
+  tour.setup({ smooth_scroll = false, walk = false })
   show(bubble(false))
   check(#badge_marks() == 1, "Overview already shows its ready call as a red badge")
   local expected = { "Entry:1", "Entry:2", "Entry:3", "Entry:4" }

@@ -50,7 +50,7 @@ local function marks()
   return vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })
 end
 local function test()
-  tour.setup({ smooth_scroll = false })
+  tour.setup({ smooth_scroll = false, walk = false })
   show()
   local buf = state().stops[1].buf
   local tick = vim.api.nvim_buf_get_changedtick(buf)

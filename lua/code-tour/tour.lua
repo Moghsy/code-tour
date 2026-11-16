@@ -45,6 +45,7 @@ local function locate(stop, box)
     end
   end
 end
+local walk_move -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -266,7 +267,7 @@ local function activate(data, opts, root, append, review, base)
     composer.clear()
     s.arrival = nil
     s.id = vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
-    s.stops, s.pending, s.questions, s.frames = {}, {}, {}, {}
+    s.stops, s.pending, s.questions, s.frames, s.walk_index = {}, {}, {}, {}, nil
     s.stop, s.box = 1, 1
   end
   clear_intent()
@@ -372,6 +373,12 @@ function M.next_explanation(delta)
     return
   end
   clear_intent()
+  if s.opts and s.opts.walk and walk_move(delta) then
+    reset_pages()
+    s.visible = true
+    render(true)
+    return
+  end
   local direction = delta < 0 and -1 or 1
   for _ = 1, math.abs(delta) do
     local stop, box = current()
@@ -543,6 +550,45 @@ local function warn_stale()
       .. ". <leader>ae on a stale box regenerates it and its linked boxes.",
     vim.log.levels.WARN
   )
+end
+
+-- The graph drives reading order: depth-first over every edge, coming back to a
+-- snippet between its edges (see walk.lua). Returns false to fall back to the
+-- older route (e.g. when the graph has a cycle), after saying why.
+walk_move = function(delta)
+  local plan, err = require("code-tour.walk").plan(build_graph())
+  if not plan then
+    notify(err, vim.log.levels.WARN)
+    return false
+  end
+  local steps = {}
+  for _, step in ipairs(plan.steps) do
+    local si, ki = step.box:match("^(%d+)%.(%d+)$")
+    local stop = s.stops[tonumber(si)]
+    local box = stop and stops.boxes(stop)[tonumber(ki)]
+    if stop and box and stops.ready(stop) and not box._unlocated then
+      steps[#steps + 1] = { stop = tonumber(si), box = tonumber(ki), id = step.box }
+    end
+  end
+  if #steps == 0 then
+    return false
+  end
+  local stop, box = current()
+  local here = box_id_of(stop, box)
+  local index = s.walk_index and steps[s.walk_index] and steps[s.walk_index].id == here and s.walk_index or nil
+  for n, step in ipairs(steps) do
+    if not index and step.id == here then
+      index = n
+    end
+  end
+  index = index or 0
+  local direction = delta < 0 and -1 or 1
+  for _ = 1, math.abs(delta) do
+    index = math.max(1, math.min(#steps, index + direction))
+  end
+  s.walk_index, s.frames = index, {}
+  position(steps[index])
+  return true
 end
 
 -- Write the tour graph (nodes = snippets, links = next/optional routes) and return its path.
@@ -1351,7 +1397,7 @@ end
 M.render = render
 
 function M.setup(opts)
-  s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
+  s.opts = vim.tbl_extend("force", { walk = true, page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
     saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true }, opts or {})
   for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
     local value = s.opts[name]

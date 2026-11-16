@@ -143,3 +143,7 @@ The saved tests use isolated temporary data/state/cache roots and stub agent del
 ## Tour graph
 
 `:CodeTourGraph` (or `code-tour graph`) writes the active tour as NetworkX node-link JSON, the shape graphify uses, in `$TMPDIR/code-tour-UID/`. Nodes are snippets (identical ranges merge, boxes are attributes with their stale status); links are `next` (reading route), `optional` (red callees) and `overlaps`. Stale-explanation reports are computed from this graph. It is a projection of the tour; the saved tour format is unchanged.
+
+## Graph-driven navigation
+
+With `walk = true` (the default; set `walk = false` for the older gold/red route), `aj`/`ak` follow the tour graph depth-first (`lua/code-tour/walk.lua`). Every call edge is walked in authored order. After each branch except the last on a box, the reader returns to the calling box before the next edge; after the last edge the walk carries on with the box's following part. The tour must be a DAG: a call back into a snippet already on the path is reported as a cycle (and the older route is used) unless its edge is marked `"ref": true`. A snippet reached from two places is walked once; the later edge is a reference. Lazy snippets are skipped until explained. Walking back (`ak`) retraces the same steps, including the returns.

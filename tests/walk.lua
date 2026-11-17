@@ -36,16 +36,16 @@ local plan = assert(plan_of(
 check(trace(plan) == "a1 a2 b1 a2^ c1 a2^ d1 d2 a2^ a3", "Every branch returns to its caller, the last included: " .. trace(plan))
 check(plan.steps[3].kind == "enter" and plan.steps[3].via.source == "A", "Entering a node records its edge")
 
--- The last edge is followed with no return when the node has nothing left to show.
+-- Every call returns to its caller, except the closing run of returns, which leads nowhere.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1") }, { edge("A", "B", "a1"), edge("A", "C", "a1") }))
-check(trace(plan) == "a1 b1 a1^ c1 a1^", "The last branch returns too: " .. trace(plan))
+check(trace(plan) == "a1 b1 a1^ c1", "The walk ends on the last snippet it reached: " .. trace(plan))
 
 -- Nested branches walk back up one level at a time.
 plan = assert(plan_of(
   { node("A", "a1"), node("B", "b1", "b2"), node("C", "c1"), node("D", "d1"), node("E", "e1") },
   { edge("A", "B", "a1"), edge("A", "E", "a1"), edge("B", "C", "b2"), edge("B", "D", "b2") }
 ))
-check(trace(plan) == "a1 b1 b2 c1 b2^ d1 b2^ a1^ e1 a1^", "Walking back up through nested branches: " .. trace(plan))
+check(trace(plan) == "a1 b1 b2 c1 b2^ d1 b2^ a1^ e1", "Walking back up through nested branches: " .. trace(plan))
 
 -- Main route edges (no box) come after the node's own boxes and calls.
 plan = assert(plan_of(
@@ -59,7 +59,7 @@ plan = assert(plan_of(
   { node("A", "a1"), node("B", "b1"), node("C", "c1"), node("D", "d1") },
   { edge("A", "B", "a1"), edge("A", "C", "a1"), edge("B", "D", "b1"), edge("C", "D", "c1") }
 ))
-check(trace(plan) == "a1 b1 d1 b1^ a1^ c1 a1^", "Shared node is walked once: " .. trace(plan))
+check(trace(plan) == "a1 b1 d1 b1^ a1^ c1", "Shared node is walked once: " .. trace(plan))
 check(#plan.refs == 1 and plan.refs[1].why == "shared" and plan.refs[1].to == "D", "Shared edge reported as a reference")
 
 -- No stray return when a later sibling was claimed by an earlier subtree.
@@ -67,24 +67,24 @@ plan = assert(plan_of(
   { node("A", "a1"), node("B", "b1"), node("C", "c1") },
   { edge("A", "B", "a1"), edge("A", "C", "a1"), edge("B", "C", "b1") }
 ))
-check(trace(plan) == "a1 b1 c1 b1^ a1^", "A claimed sibling leaves no dangling return: " .. trace(plan))
+check(trace(plan) == "a1 b1 c1", "A claimed sibling leaves no dangling return: " .. trace(plan))
 
 -- Cycles are not errors: the edge back onto the path becomes a reference.
 local cyclic = { node("A", "a1"), node("B", "b1") }
 plan = assert(plan_of(cyclic, { edge("A", "B", "a1"), edge("B", "A", "b1") }))
-check(trace(plan) == "a1 b1 a1^" and plan.refs[1].why == "recursive" and plan.refs[1].to == "A", "Recursion is a reference: " .. trace(plan))
+check(trace(plan) == "a1 b1" and plan.refs[1].why == "recursive" and plan.refs[1].to == "A", "Recursion is a reference: " .. trace(plan))
 plan = assert(plan_of(cyclic, { edge("A", "B", "a1"), edge("B", "A", "b1", { ref = true }) }))
-check(trace(plan) == "a1 b1 a1^" and plan.refs[1].why == "marked", "An author-marked ref stays a marked reference")
+check(trace(plan) == "a1 b1" and plan.refs[1].why == "marked", "An author-marked ref stays a marked reference")
 plan = assert(plan_of({ node("A", "a1") }, { edge("A", "A", "a1") }))
 check(trace(plan) == "a1" and plan.refs[1].why == "recursive", "Self-recursion is a reference")
 -- A loop with no entry from outside still gets read once, from its first snippet.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1") },
   { edge("A", "B", "a1"), edge("B", "C", "b1"), edge("C", "A", "c1") }))
-check(trace(plan) == "a1 b1 c1 b1^ a1^" and #plan.refs == 1, "A closed loop is walked once: " .. trace(plan))
+check(trace(plan) == "a1 b1 c1" and #plan.refs == 1, "A closed loop is walked once: " .. trace(plan))
 -- Mutual recursion below a root.
 plan = assert(plan_of({ node("R", "r1"), node("A", "a1"), node("B", "b1") },
   { edge("R", "A", "r1"), edge("A", "B", "a1"), edge("B", "A", "b1") }))
-check(trace(plan) == "r1 a1 b1 a1^ r1^" and plan.refs[1].why == "recursive", "Mutual recursion terminates: " .. trace(plan))
+check(trace(plan) == "r1 a1 b1" and plan.refs[1].why == "recursive", "Mutual recursion terminates: " .. trace(plan))
 
 -- Several roots are walked in authored order.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1") }, {}))
@@ -96,13 +96,13 @@ plan = assert(plan_of(
 ))
 local cursor = walk.cursor(plan)
 check(cursor:next().box == "b1" and cursor:next().kind == "return" and cursor:next().box == "c1", "Cursor goes forward")
-check(cursor:next().kind == "return" and cursor:next() == nil and cursor:prev().box == "c1" and cursor:prev().kind == "return", "Cursor walks back up")
+check(cursor:next() == nil and cursor:prev().kind == "return" and cursor:prev().box == "b1", "Cursor walks back up")
 check(cursor:seek("C").box == "c1" and cursor.index == 4, "Cursor can seek a node")
 
 -- Optional edges are never walked automatically, and their snippets are not roots.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1"), node("O", "o1") },
   { edge("A", "B", "a1", { relation = "optional" }), edge("A", "C", "a1"), edge("B", "O", "b1", { relation = "optional" }) }))
-check(trace(plan) == "a1 c1 a1^", "Only gold edges are walked: " .. trace(plan))
+check(trace(plan) == "a1 c1", "Only gold edges are walked: " .. trace(plan))
 -- A gold edge from an optional snippet is still part of that snippet's own branch only.
 plan = assert(plan_of({ node("A", "a1"), node("B", "b1"), node("C", "c1") },
   { edge("A", "B", "a1", { relation = "optional" }), edge("B", "C", "b1") }))

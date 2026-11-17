@@ -149,7 +149,7 @@ The saved tests use isolated temporary data/state/cache roots and stub agent del
 With `walk = true` (the default; set `walk = false` for the older route), `aj`/`ak` follow the tour graph depth-first (`lua/code-tour/walk.lua`). The tour is a directed graph and may contain cycles (recursion); the walk is a spanning tree of it, so each snippet is shown once and reading cannot loop.
 
 - Only gold (`next`) calls are walked automatically, in authored order. Optional (red) calls stay the reader's to open with `ad`; finishing one returns to the box it was opened from.
-- Every gold branch, the last included, ends with a return to the calling box before the walk goes on to the next branch, the box's following part, or out of the snippet. Moving between top-level snippets is not a call and has no return.
+- Every gold branch, the last included, ends with a return to the calling box before the walk goes on to the next branch, the box's following part, or out of the snippet. Moving between top-level snippets is not a call and has no return. The run of returns at the very end of the tour is dropped, so the walk (and the snippet counter) ends on the last snippet reached, not on a caller with a lower number.
 - A gold call back to a snippet already on the path (recursion or a loop) or to one already walked (a shared callee) is a reference: it is never walked. No marking is needed; `"ref": true` only forces it. Lazy snippets are skipped until explained.
 - The gold call `aj` takes next is highlighted in its own colour (green); other gold calls keep the gold badge, labelled "later snippet". Several calls on one line are separate edges, each with its own columns.
 - Walking back (`ak`) retraces the same steps, including the returns.

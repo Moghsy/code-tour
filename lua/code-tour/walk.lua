@@ -214,6 +214,11 @@ function M.plan(graph, opts)
       end
     end
   end
+  -- Coming back out of the last call leads nowhere new: the walk ends on the last snippet
+  -- it reached, not on a caller whose number is lower than the snippets just read.
+  while #steps > 0 and steps[#steps].kind == "return" do
+    steps[#steps] = nil
+  end
   return { steps = steps, refs = refs, folded = folded, shadowed = shadowed, max_depth = deepest }
 end
 

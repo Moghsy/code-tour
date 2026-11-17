@@ -1428,6 +1428,10 @@ function M.expand_call(call)
     call = call or calls[1]
   end
   if not locate(call) then return end
+  -- Say why a call was left unexpanded, so opening it is an informed choice.
+  if call.why and not stops.ready(call) then
+    notify(("Skipped earlier: %s"):format(call.why), vim.log.levels.INFO)
+  end
   if stops.ready(call) then
     started("Opening explanation: " .. (call.title or call.file))
     enter_call(call, stop, box)

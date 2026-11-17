@@ -115,6 +115,12 @@ local function run()
   check(pcall(tour.show, { { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
     { file = "main.lua", start = 6, ["end"] = 8, title = "log", lazy = true, why = "logging helper",
       callsite = { start = 2, ["end"] = 2, symbol = "line" } } } } }, { root = root }), "A lazy call can say why it was skipped")
+  local lazy_call = tour.state().stops[2]
+  check(lazy_call.why == "logging helper", "The reason is kept on the call")
+  pcall(tour.expand_call, lazy_call)
+  local said = false
+  for _, n in ipairs(notes) do if n:find("Skipped earlier: logging helper", 1, true) then said = true end end
+  check(said, "Opening a skipped call says why it was skipped")
   -- A new tour resets the zoom.
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Fresh", note = "x" } }, { root = root })
   check(tour.state().zoom == nil, "A new tour starts unfolded")

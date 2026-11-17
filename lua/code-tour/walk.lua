@@ -5,10 +5,11 @@
 --
 -- plan(graph) returns a flat list of steps.
 -- Each step shows one box of one snippet. A snippet's boxes are read in order.
--- Edges leave from the box that makes the call. Every edge is walked in turn and,
--- when more edges remain on that box, a `return` step brings the reader back to
--- it before the next edge. After the last edge there is nothing to choose, so the
--- reader carries straight on with the next box (or finishes the snippet).
+-- Edges leave from the box that makes the call. Every edge is walked in turn and
+-- every call, the last included, ends with a `return` step that brings the reader
+-- back to the calling box before the walk goes on (to the next edge, the next box,
+-- or out of the snippet). Moving between top-level snippets is not a call and has
+-- no return.
 --
 -- A gold edge becomes a reference (never walked) when:
 --   * it is marked `ref`, or
@@ -114,12 +115,9 @@ function M.plan(graph, opts)
           if not ok then
             return nil, problem
           end
-          -- Come back only while another edge on this box is still to be walked.
-          local more = false
-          for j = i + 1, #walk do
-            more = more or not state[walk[j].link.target]
-          end
-          if more then
+          -- Every branch comes back to the box that made the call, the last one included.
+          -- (Route edges between top-level snippets are not calls: nothing to return to.)
+          if item.link.via == "call" then
             steps[#steps + 1] = { node = id, box = box.id, kind = "return" }
           end
         end

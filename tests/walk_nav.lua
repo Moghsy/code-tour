@@ -67,11 +67,11 @@ local function run()
       { start = 4, ["end"] = 6, note = "Finish" },
     },
   } }, { root = root .. "/app" })
-  local expected = "Main.1 Main.2 B.1 Main.3"
-  check(walk_through(3) == expected, "Only the gold callee is walked; the optional one waits: " .. expected)
+  local expected = "Main.1 Main.2 B.1 Main.2 Main.3"
+  check(walk_through(4) == expected, "Only the gold callee is walked, and it returns to its caller: " .. expected)
   local view = require("code-tour.tour-view")
   local function header() return view.state().rows[2][2][1] end
-  tour.next_explanation(-1)
+  tour.next_explanation(-2)
   check(titles() == "B.1" and header():find("Snippet 2/2", 1, true), "Snippets are numbered in walk order: " .. header())
   tour.next_explanation(-1)
   check(header():find("Snippet 1/2", 1, true), "The caller keeps its own number: " .. header())
@@ -79,18 +79,20 @@ local function run()
   check(titles() == "B.1" and header():find("Snippet 2/2", 1, true), "an goes to the next snippet in walk order")
   tour.next_snippet(-1)
   check(titles() == "Main.1" and header():find("Snippet 1/2", 1, true), "ap goes back in walk order")
-  tour.next_explanation(3)
+  tour.next_explanation(2)
   tour.expand_call(tour.state().stops[3])
   check(header():find("Snippet 1/2 · optional", 1, true), "An optional branch is labelled as optional: " .. header())
   tour.next_snippet(-1)
-  tour.next_explanation(3)
+  tour.next_explanation(4)
   check(titles() == "Main.3", "Back on the walk after the optional branch")
   tour.next_explanation(1)
   check(titles() == "Main.3", "The end of the walk stays put")
   tour.next_explanation(-1)
+  check(titles() == "Main.2", "Previous shows the return to the caller")
+  tour.next_explanation(-1)
   check(titles() == "B.1", "Previous walks back up the route")
   tour.next_explanation(-1)
-  check(titles() == "Main.2", "Walking back returns to the caller")
+  check(titles() == "Main.2", "Walking back reaches the call")
   tour.next_explanation(1)
   check(titles() == "B.1", "Walking forward again repeats the same route")
   tour.next_explanation(-5)
@@ -118,7 +120,7 @@ local function run()
     return rows
   end
   local overview_rows = badge_rows()
-  tour.next_explanation(3)
+  tour.next_explanation(4)
   check(titles() == "Main.3", "Moved to the last part: " .. titles())
   local later = badge_rows()
   check(later[2] == "CodeTourDoneCall" and later[3] == "CodeTourCall",
@@ -160,7 +162,7 @@ local function run()
   local before = #notes
   tour.next_explanation(0)
   for _ = 1, 4 do tour.next_explanation(1); seen[#seen + 1] = titles() end
-  check(table.concat(seen, " ") == "Main.2 B.1 Main.3 Main.3" and #notes == before, "Marked recursion walks without a cycle: " .. table.concat(seen, " "))
+  check(table.concat(seen, " ") == "Main.2 B.1 Main.2 Main.3" and #notes == before, "Marked recursion walks without a cycle: " .. table.concat(seen, " "))
   -- Recursion needs no marking: the call back onto the path is a reference automatically.
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
@@ -173,7 +175,7 @@ local function run()
   } }, { root = root .. "/app" })
   seen = {}
   for _ = 1, 4 do tour.next_explanation(1); seen[#seen + 1] = titles() end
-  check(table.concat(seen, " ") == "Main.2 B.1 Main.3 Main.3" and #notes == before, "Unmarked recursion walks without a warning: " .. table.concat(seen, " "))
+  check(table.concat(seen, " ") == "Main.2 B.1 Main.2 Main.3" and #notes == before, "Unmarked recursion walks without a warning: " .. table.concat(seen, " "))
   -- The gold call the walk takes next gets its own colour; other gold calls keep theirs.
   tour.show({ {
     file = "multi.lua", start = 1, ["end"] = 2, title = "Line", note = "One line, three calls",

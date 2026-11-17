@@ -15,7 +15,7 @@ local function node(id, ...)
   return { id = id, label = id, stops = { 1 }, boxes = boxes }
 end
 local function edge(from, to, from_box, extra)
-  return vim.tbl_extend("force", { source = from, target = to, relation = "next", via = "call", from_box = from_box }, extra or {})
+  return vim.tbl_extend("force", { source = from, target = to, relation = "next", via = "call", level = 1, from_box = from_box }, extra or {})
 end
 local function trace(plan)
   local out = {}

@@ -141,12 +141,9 @@ local function test()
   )
   check(#state().stops[1].removed[1].lines == 2, "Removed lines remain virtual data")
   check(vim.deep_equal(vim.fn.readfile(root .. "/source.lua"), lines), "Rendering leaves source unchanged")
-  local old = {
-    version = 1,
-    snippets = { { file = "source.lua", start_line = 1, end_line = 3, overview = "Legacy", sections = {} } },
-  }
-  show(old)
-  check(state().stops[1].note == "Legacy", "Former file format still loads")
+  -- The former version-1 file format is no longer accepted.
+  check(not pcall(show, { version = 1, snippets = { { file = "source.lua", start_line = 1, end_line = 3, overview = "Legacy", sections = {} } } }),
+    "The former file format is rejected")
   -- Exercise a real installed Tree-sitter parser, without an LSP server.
   vim.opt.rtp:append(vim.fn.expand("~/.local/share/nvim/site"))
   vim.fn.writefile(

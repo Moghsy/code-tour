@@ -24,10 +24,10 @@ local function optional()
     callsite = { start = 3, symbol = "optional" } }
 end
 local function process()
-  return { file = "process.lua", start = 1, ["end"] = 4, title = "Process", note = "Process the input.", next = true,
+  return { file = "process.lua", start = 1, ["end"] = 4, title = "Process", note = "Process the input.", next = true, level = 1,
     callsite = { start = 3, symbol = "service.process" }, parts = {
       { start = 1, ["end"] = 2, note = "Call inner.", calls = {
-        { file = "inner.lua", start = 1, ["end"] = 3, title = "Inner", note = "Double the value.", next = true,
+        { file = "inner.lua", start = 1, ["end"] = 3, title = "Inner", note = "Double the value.", next = true, level = 1,
           callsite = { start = 2, symbol = "inner" } },
       } },
       { start = 3, ["end"] = 4, note = "Return the result." },
@@ -50,11 +50,11 @@ local function marks()
   return vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })
 end
 local function test()
-  tour.setup({ smooth_scroll = false, walk = false })
+  tour.setup({ smooth_scroll = false })
   show()
   local buf = state().stops[1].buf
   local tick = vim.api.nvim_buf_get_changedtick(buf)
-  local expected = { "Entry:1", "Entry:2", "Entry:3", "Process:1", "Process:2", "Inner:1", "Process:3", "Entry:4", "Tail:1" }
+  local expected = { "Entry:1", "Entry:2", "Entry:3", "Process:1", "Process:2", "Inner:1", "Process:2", "Process:3", "Entry:3", "Entry:4", "Tail:1" }
   for i, label in ipairs(expected) do
     check(here() == label, "Gold route follows calls and returns to the following part at " .. i .. ": " .. here())
     if i < #expected then tour.next_explanation(1) end
@@ -69,7 +69,7 @@ local function test()
   local gold, red, label, example = 0, 0, 0, 0
   for _, mark in ipairs(marks()) do
     local details = mark[4]
-    if details.hl_group == "CodeTourNextCall" then
+    if details.hl_group == "CodeTourNextCall" or details.hl_group == "CodeTourCurrentCall" then
       gold = gold + 1
       check(mark[2] == 2 and mark[3] == source[3]:find("service.process", 1, true) - 1,
         "Gold badge covers the invoked receiver and method")
@@ -78,7 +78,7 @@ local function test()
     for _, chunk in ipairs(details.virt_text or {}) do
       if chunk[1]:find("<- next snippet", 1, true) then
         label = label + 1
-        check(details.virt_text_pos == "eol" and chunk[2] == "CodeTourNextLabel", "Transition label is gold and at line end")
+        check(details.virt_text_pos == "eol" and (chunk[2] == "CodeTourCurrentLabel" or chunk[2] == "CodeTourNextLabel"), "Transition label is a gold-family label at line end")
       end
       if chunk[1]:find("result = 2", 1, true) then example = example + 1 end
     end
@@ -97,23 +97,23 @@ local function test()
   tour.return_to_caller()
   check(here() == "Entry:3" and #state().frames == 0, "ao exits a gold call early to its caller")
   tour.next_explanation(3)
-  check(here() == "Inner:1" and #state().frames == 2, "Nested gold calls keep separate return frames")
+  check(here() == "Inner:1", "Walking reaches the nested gold call")
   tour.return_to_caller()
-  check(here() == "Process:2" and #state().frames == 1, "ao exits only the innermost gold call")
-  tour.next_explanation(3)
-  check(here() == "Entry:4" and #state().frames == 0, "Continuing the nested call resumes each following part")
+  check(here() == "Process:2", "ao exits only the innermost gold call")
+  tour.next_explanation(5)
+  check(here() == "Entry:4", "Continuing the nested call walks back up through each caller to the following part")
 
   show()
   tour.expand_call(state().stops[2])
   tour.next_explanation(-1)
-  check(here() == "Entry:1", "ak after manual entry from an overview restores that overview")
+  check(here() == "Entry:3", "ak from a manually entered gold call steps back along the walk, to its caller box")
   tour.expand_call(state().stops[2])
-  tour.next_explanation(4)
+  tour.next_explanation(6)
   check(here() == "Entry:4", "A manually inspected gold call also finishes at the following authored part")
 
   -- An optional outer branch must retain its scope even when its route includes gold calls.
   local outer = process()
-  outer.next = false
+  outer.next, outer.level = false, nil
   show(outer)
   tour.next_explanation(2)
   tour.expand_call(state().stops[2])
@@ -122,31 +122,35 @@ local function test()
 
   -- Several gold calls in one box run in authored order; red siblings are skipped.
   local sibling = optional()
-  sibling.title, sibling.next = "Second", true
+  sibling.title, sibling.next, sibling.level, sibling.start = "Second", true, 1, 2
   local first = process()
   first.parts = nil
   show(first, nil, sibling)
   tour.next_explanation(3)
   check(here() == "Process:1", "First gold sibling starts after its caller box")
   tour.next_explanation(1)
-  check(here() == "Second:1", "Next gold sibling follows without revisiting the caller")
+  check(here() == "Entry:3", "Each gold sibling returns to the caller box")
   tour.next_explanation(1)
-  check(here() == "Entry:4", "Final gold sibling returns to the following caller part")
+  check(here() == "Second:1", "Next gold sibling follows in authored order: " .. here())
+  tour.next_explanation(2)
+  check(here() == "Entry:4", "Final gold sibling returns, then reading goes on to the following caller part")
 
   -- A tail call has no remaining caller parts, so it continues to the next main snippet.
   show(first, { { start = 1, ["end"] = 2, note = "Prepare" }, { start = 3, ["end"] = 5, note = "Last part" } })
-  tour.next_explanation(4)
-  check(here() == "Tail:1", "Gold calls in the final part continue to the following main snippet")
+  tour.next_explanation(5)
+  check(here() == "Tail:1", "Gold calls in the final part return, then continue to the following main snippet")
   show(first, {})
   tour.next_explanation(1)
   check(here() == "Process:1", "Snippets without parts follow overview gold calls")
-  tour.next_explanation(1)
-  check(here() == "Tail:1", "Overview gold call completion continues to the next main snippet")
+  tour.next_explanation(2)
+  check(here() == "Tail:1", "Overview gold call completion returns, then continues to the next main snippet")
 
   show()
   tour.next_explanation(3)
   tour.next_snippet(1)
-  check(here() == "Tail:1" and #state().frames == 0, "Main snippet navigation still skips method branches")
+  check(here() == "Inner:1", "an walks the graph one snippet at a time, into the nested gold call")
+  tour.next_snippet(3)
+  check(here() == "Tail:1" and #state().frames == 0, "...coming back out through each caller to the next main snippet")
   local invalid = process()
   invalid.lazy, invalid.parts, invalid.note = true, nil, nil
   local id = state().id

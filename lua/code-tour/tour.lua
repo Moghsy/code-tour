@@ -156,16 +156,13 @@ local function decorate(stop, box, layout)
         if range then
           local site = call.callsite
           -- nil outside the walk (older labels); true for the edge aj follows next, else false.
-          local current
-          if s.opts and s.opts.walk then
-            current = upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
-              and upcoming.source == owner.path .. ":" .. owner.start .. "-" .. owner["end"]
-              and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
-              and upcoming.callsite.start_col == site.start_col
-          end
-          local finished = s.opts and s.opts.walk and call.next == true and not current
+          local current = upcoming ~= nil and call.next == true and upcoming.symbol == site.symbol
+            and upcoming.source == owner.path .. ":" .. owner.start .. "-" .. owner["end"]
+            and upcoming.callsite ~= nil and upcoming.callsite.start == site.start
+            and upcoming.callsite.start_col == site.start_col
+          local finished = call.next == true and not current
             and done[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
-          local is_folded = s.opts and s.opts.walk and call.next == true and not current and not finished
+          local is_folded = call.next == true and not current and not finished
             and folded[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
           badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current, finished, is_folded)
         end
@@ -433,7 +430,7 @@ function M.next_snippet(delta)
   -- Walk mode: the same route as aj, one stop per snippet instead of per box. A
   -- snippet's consecutive steps are one stop, and coming back to a caller after a
   -- branch is a stop of its own, exactly as when walking box by box.
-  local steps = s.opts and s.opts.walk and walk_steps and walk_steps()
+  local steps = walk_steps and walk_steps()
   local at = steps and #steps > 0 and walk_index(steps)
   if at then
     local function run_start(i)
@@ -492,7 +489,7 @@ function M.next_explanation(delta)
     return
   end
   clear_intent()
-  if s.opts and s.opts.walk and walk_move(delta) then
+  if walk_move(delta) then
     reset_pages()
     s.visible = true
     render(true)
@@ -770,9 +767,6 @@ edge_key = function(source, site)
   return ("%s|%s|%s|%s"):format(source, site.symbol or "", site.start or "", site.start_col or "")
 end
 walk_upcoming = function(stop, box)
-  if not (s.opts and s.opts.walk) then
-    return nil, {}, {}
-  end
   local steps, _, plan = walk_steps()
   if not steps then
     return nil, {}, {}
@@ -805,7 +799,7 @@ end
 -- (older route, or a graph the walk cannot plan). Snippets off the walk, such as
 -- optional branches, have no number.
 local function walk_numbers()
-  if not (s.opts and s.opts.walk) or #s.stops == 0 then
+  if #s.stops == 0 then
     return nil
   end
   local plan, _, graph = plan_walk()
@@ -865,7 +859,7 @@ s.snippet_numbers = walk_numbers
 -- detail asked for. `broken` lists gold calls that hang below a call that is not walked:
 -- they are never reached, which breaks the end-to-end path.
 route_summary = function()
-  if not (s.opts and s.opts.walk) or #s.stops == 0 then
+  if #s.stops == 0 then
     return nil
   end
   local plan, _, graph = plan_walk(true)
@@ -913,10 +907,6 @@ walk_numbers_for_nav = walk_numbers
 -- Folded calls are not walked (they behave like optional ones) and are marked on screen.
 function M.zoom(delta)
   if #s.stops == 0 then
-    return
-  end
-  if not (s.opts and s.opts.walk) then
-    notify("Zoom needs the graph walk (walk = true)")
     return
   end
   local full, err = plan_walk(true)
@@ -1730,8 +1720,6 @@ end
 function M.load(path)
   if not path or path == "" then
     path = vim.fn.getcwd() .. "/.nvim/code-tour.json"
-    local legacy = vim.fn.getcwd() .. "/.nvim/walkthrough.json"
-    if not vim.uv.fs_stat(path) and vim.uv.fs_stat(legacy) then path = legacy end
   end
   path = vim.fn.fnamemodify(path, ":p")
   local ok, result = pcall(function()
@@ -1772,7 +1760,7 @@ end
 M.render = render
 
 function M.setup(opts)
-  s.opts = vim.tbl_extend("force", { walk = true, page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
+  s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
     saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true }, opts or {})
   for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
     local value = s.opts[name]

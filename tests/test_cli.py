@@ -197,7 +197,7 @@ class RPCIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(cli.rpc(address, 'return require("code-tour").state().stops[1].note'), 'Use the renamed plugin')
 
-    def test_saved_tour_uses_new_filename_with_legacy_fallback(self):
+    def test_saved_tour_uses_only_the_current_filename(self):
         address = self.addresses[0]
         directory = self.root / '.nvim'
         directory.mkdir(exist_ok=True)
@@ -205,8 +205,7 @@ class RPCIntegrationTests(unittest.TestCase):
         current = directory / 'code-tour.json'
         legacy.write_text(json.dumps([dict(file='source.lua', start=1, end=3, note='Legacy saved tour')]))
         try:
-            self.assertTrue(cli.rpc(address, 'return require("code-tour").load()'))
-            self.assertEqual(cli.rpc(address, 'return require("code-tour").state().stops[1].note'), 'Legacy saved tour')
+            self.assertFalse(cli.rpc(address, 'return require("code-tour").load()'))
             current.write_text(json.dumps([dict(file='source.lua', start=1, end=3, note='New saved tour')]))
             self.assertTrue(cli.rpc(address, 'return require("code-tour").load()'))
             self.assertEqual(cli.rpc(address, 'return require("code-tour").state().stops[1].note'), 'New saved tour')

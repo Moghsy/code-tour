@@ -481,7 +481,8 @@ def main(argv=None):
     # Relative filenames are relative to the caller's cwd unless --project was explicit.
     data_root = (args.project or Path.cwd()).resolve()
     if data is not None:
-        items = data.get('snippets', []) if isinstance(data, dict) else data
+        # A fill may also answer {"unresolved": reason}; anything else is a list of stops.
+        items = data if isinstance(data, list) else []
         files = resolve_stops(items, data_root)
     else:
         files = []

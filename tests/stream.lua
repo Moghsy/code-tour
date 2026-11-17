@@ -16,7 +16,7 @@ local function check(value, message) assert(value, message); checks = checks + 1
 local function header() return view.state().rows[2][2][1] end
 local function title() local s = tour.state(); return s.stops[s.stop].title end
 local function call(file_start, file_end, name, site, calls)
-  return { file = "main.lua", start = file_start, ["end"] = file_end, title = name, note = name, next = true,
+  return { file = "main.lua", start = file_start, ["end"] = file_end, title = name, note = name, next = true, level = 1,
     callsite = { start = site, ["end"] = site, symbol = "line" }, calls = calls }
 end
 local function marks()
@@ -64,7 +64,7 @@ local function run()
   -- The agent fills B (and announces C as pending below it); the reader waiting on B lands on it.
   local filled = tour.fill(shown.pending[1].id, {
     { file = "main.lua", start = 6, ["end"] = 8, title = "B", note = "B is written now", calls = {
-      { file = "main.lua", start = 10, ["end"] = 12, title = "C", next = true, pending = true,
+      { file = "main.lua", start = 10, ["end"] = 12, title = "C", next = true, level = 1, pending = true,
         callsite = { start = 7, ["end"] = 7, symbol = "line" } } } } })
   check(filled.pending and #filled.pending == 1 and filled.pending[1].title == "C", "A fill can announce further pending snippets")
   check(not tour.state().stops[tour.state().stop].placeholder and title() == "B", "Reader stays on B, now written")

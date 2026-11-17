@@ -118,29 +118,7 @@ function M.nested(stop)
   return false
 end
 
--- Convert the former watched-file format at the boundary, keeping one internal model.
 function M.normalize(input, root)
-  if input.snippets then
-    local converted = {}
-    for _, item in ipairs(input.snippets) do
-      local parts = {}
-      for _, part in ipairs(item.sections or {}) do
-        parts[#parts + 1] =
-          { start = part.start_line, ["end"] = part.end_line, note = part.explanation, title = part.title }
-      end
-      converted[#converted + 1] = {
-        file = item.file,
-        start = item.start_line,
-        ["end"] = item.end_line,
-        note = item.overview,
-        title = item.title,
-        parts = parts,
-        example = item.example,
-        old = item.old,
-      }
-    end
-    input = converted
-  end
   assert(type(input) == "table" and vim.islist(input) and #input > 0, "Expected a nonempty JSON list of stops")
   local result = {}
   root = vim.fs.normalize(root)
@@ -174,6 +152,7 @@ function M.normalize(input, root)
     assert(not stop.next or not stop.lazy, "Next calls require a prepared explanation")
     assert(stop.level == nil or (type(stop.level) == "number" and stop.level >= 0 and stop.level % 1 == 0), "level must be a non-negative integer")
     assert(stop.level == nil or stop.next, "Only a next call can have a level")
+    assert(not stop.next or stop.level ~= nil, "A next call needs a level (0 is the essential path, higher is more detail)")
     assert(stop.why == nil or (type(stop.why) == "string" and stop.why:find("%S")), "why must be a short reason")
     assert(stop.why == nil or parent_box, "Only a call branch can have a why")
     assert(stop.pending == nil or type(stop.pending) == "boolean", "pending must be a boolean")
@@ -234,7 +213,6 @@ function M.normalize(input, root)
     stop.parts = flat
     M.validate_coverage(stop)
     assert(stop.old == nil or type(stop.old) == "string", "old must be the replaced text")
-    stop.example = stop.example or stop.examples
     if stop.example then
       assert(type(stop.example) == "table", "Example must contain input, output and/or values")
       local values = {}

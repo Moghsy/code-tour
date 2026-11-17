@@ -41,7 +41,7 @@ local function callsite()
   check(here() == "A:3", "Reach the middle caller box")
 end
 local function test()
-  tour.setup({ smooth_scroll = false, walk = false })
+  tour.setup({ smooth_scroll = false })
   local b = stop("b.lua", 20, 25, "B", { part(20, 22), part(23, 25) })
   show({ b })
   check(model.outline(state().stops):find("Call from 1.3", 1, true), "Outline identifies caller box")

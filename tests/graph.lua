@@ -42,7 +42,7 @@ local function run()
   tour.show({
     { file = "main.lua", start = 1, ["end"] = 4, title = "Main", note = "Main flow",
       parts = { { start = 1, ["end"] = 2, note = "Call helper", calls = {
-        { file = "main.lua", start = 6, ["end"] = 8, title = "Helper", note = "Doubles x", next = true,
+        { file = "main.lua", start = 6, ["end"] = 8, title = "Helper", note = "Doubles x", next = true, level = 1,
           callsite = { start = 2, ["end"] = 2, symbol = "helper" } },
       } }, { start = 3, ["end"] = 4, note = "Return" } } },
     { file = "main.lua", start = 6, ["end"] = 8, title = "Helper again", note = "Same code, second tour stop" },

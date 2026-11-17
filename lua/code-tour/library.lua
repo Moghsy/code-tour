@@ -192,6 +192,7 @@ function M.validate(record)
     check(nested or (v.callsite == nil and v.next == nil), "Root cannot have caller navigation")
     check(v.next == nil or type(v.next) == "boolean", "Invalid next relationship")
     check(v.level == nil or (type(v.level) == "number" and v.level >= 0 and v.level % 1 == 0 and v.next), "Invalid level")
+    check(not v.next or v.level ~= nil, "A next call needs a level")
     if v.next then
       check(v.callsite ~= nil, "Next relationship needs a caller locator")
     end

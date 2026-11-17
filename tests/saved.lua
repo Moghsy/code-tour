@@ -80,7 +80,7 @@ local function run()
               ["end"] = 3,
               title = "Helper",
               note = "OLD helper",
-              next = true,
+              next = true, level = 1,
               callsite = { start = 2, ["end"] = 2, start_col = 12, end_col = 18, symbol = "helper" },
             },
             { file = "main.lua", start = 1, ["end"] = 5, title = "Lazy", lazy = true },

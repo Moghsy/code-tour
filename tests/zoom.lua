@@ -15,8 +15,8 @@ local checks = 0
 local function check(value, message) assert(value, message); checks = checks + 1 end
 local function header() return view.state().rows[2][2][1] end
 local function title() local s = tour.state(); return s.stops[s.stop].title end
-local function call(file_start, file_end, name, site, calls)
-  return { file = "main.lua", start = file_start, ["end"] = file_end, title = name, note = name, next = true,
+local function call(file_start, file_end, name, site, calls, level)
+  return { file = "main.lua", start = file_start, ["end"] = file_end, title = name, note = name, next = true, level = level or 1,
     callsite = { start = site, ["end"] = site, symbol = "line" }, calls = calls }
 end
 local function marks()
@@ -43,7 +43,7 @@ local function run()
   tour.setup({ smooth_scroll = false })
   local shown = tour.show({
     { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
-      call(6, 8, "B", 2, { call(10, 12, "C", 7, { call(14, 16, "D", 11) }) }) } },
+      call(6, 8, "B", 2, { call(10, 12, "C", 7, { call(14, 16, "D", 11, nil, 3) }, 2) }, 1) } },
     { file = "main.lua", start = 18, ["end"] = 20, title = "E", note = "E" },
   }, { root = root })
   check(shown.route.snippets == 5, "Five snippets walked at full detail")
@@ -87,7 +87,7 @@ local function run()
   tour.show({
     { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
       sp(call(6, 8, "B", 2, { sp(call(10, 12, "C", 7, { sp(call(14, 16, "D", 11)) })) })),
-      call(22, 24, "X", 3, { call(26, 28, "Y", 23) }) } },
+      call(22, 24, "X", 3, { call(26, 28, "Y", 23, nil, 2) }, 1) } },
     { file = "main.lua", start = 18, ["end"] = 20, title = "E", note = "E" },
   }, { root = root })
   local sw = walk_titles(); check(sw == "A B C D C B A X Y X A E", "Spine full walk: " .. sw)
@@ -103,7 +103,7 @@ local function run()
   -- The route report gives the deepest level and flags calls that claim a level above their parent.
   local shown2 = tour.show({
     { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
-      call(6, 8, "B", 2, { call(10, 12, "C", 7) }) } },
+      call(6, 8, "B", 2, { call(10, 12, "C", 7, nil, 2) }, 1) } },
   }, { root = root })
   check(shown2.route.levels == 2 and #shown2.route.shadowed == 0, "Report: deepest level 2, nothing shadowed")
   local shown3 = tour.show({
@@ -121,6 +121,11 @@ local function run()
   local said = false
   for _, n in ipairs(notes) do if n:find("Skipped earlier: logging helper", 1, true) then said = true end end
   check(said, "Opening a skipped call says why it was skipped")
+  -- There is one schema: a gold call without a level is rejected, and the tour stays as it was.
+  local before_id = tour.state().id
+  local no_level = call(6, 8, "B", 2); no_level.level = nil
+  check(not pcall(tour.show, { { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = { no_level } } }, { root = root })
+    and tour.state().id == before_id, "A gold call without a level is rejected without replacing the tour")
   -- A new tour resets the zoom.
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Fresh", note = "x" } }, { root = root })
   check(tour.state().zoom == nil, "A new tour starts unfolded")

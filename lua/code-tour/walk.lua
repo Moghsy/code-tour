@@ -12,8 +12,8 @@
 -- no return.
 --
 -- Every walked snippet has a level: top-level snippets are 0, and a gold call has the
--- `level` its author gave it, else one more than the snippet it hangs off. Zoom folds
--- the calls whose level is above the chosen one, so level 0 is the essential path.
+-- `level` its author gave it. Zoom folds the calls whose level is above the chosen one,
+-- so level 0 is the essential path.
 --
 -- A gold edge becomes a reference (never walked) when:
 --   * it is marked `ref`, or
@@ -36,8 +36,9 @@ local function out_edges(graph)
   return by_node
 end
 
-local function level_of(link, depth)
-  return link.level or (depth or 0) + 1
+-- Gold calls always carry the level their author gave them (stops.normalize enforces it).
+local function level_of(link)
+  return assert(link.level, "Gold call without a level")
 end
 
 -- Returns { steps = {...}, refs = {...} }, or nil, error when nested too deeply.
@@ -97,7 +98,7 @@ function M.plan(graph, opts)
         end
         if item.link.ref then
           refs[#refs + 1] = { from = id, to = target, why = "marked" }
-        elseif opts.max_depth and item.link.via == "call" and level_of(item.link, depth) > opts.max_depth then
+        elseif opts.max_depth and item.link.via == "call" and level_of(item.link) > opts.max_depth then
           -- Zoomed out: a branch below the chosen level is folded, like an optional one.
           folded[#folded + 1] = { source = id, target = target, from_box = item.link.from_box,
             symbol = item.link.symbol, callsite = item.link.callsite }
@@ -124,7 +125,7 @@ function M.plan(graph, opts)
         if state[item.link.target] then
           refs[#refs + 1] = { from = id, to = item.link.target, why = "shared" }
         else
-          local ok, problem = visit(item.link.target, "enter", item.link, item.link.via == "call" and level_of(item.link, depth) or (depth or 0))
+          local ok, problem = visit(item.link.target, "enter", item.link, item.link.via == "call" and level_of(item.link) or (depth or 0))
           if not ok then
             return nil, problem
           end

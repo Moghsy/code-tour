@@ -54,12 +54,11 @@ local function run()
   for i = 1, 20 do lines[i] = "line " .. i end
   vim.fn.writefile(lines, root .. "/app/main.lua")
   tour.setup({ smooth_scroll = false })
-  check(tour.state().opts.walk == true, "Graph-driven navigation is the default")
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = {
       { start = 1, ["end"] = 3, note = "Calls B then C", calls = {
-        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true, level = 1,
           callsite = { start = 2, ["end"] = 2, symbol = "b" } },
         { file = "main.lua", start = 11, ["end"] = 12, title = "C", note = "C body",
           callsite = { start = 3, ["end"] = 3, symbol = "c" } },
@@ -102,7 +101,7 @@ local function run()
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = {
       { start = 1, ["end"] = 3, note = "Calls B then C", calls = {
-        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true, level = 1,
           callsite = { start = 2, ["end"] = 2, symbol = "line" } },
         { file = "main.lua", start = 11, ["end"] = 12, title = "C", note = "C body",
           callsite = { start = 3, ["end"] = 3, symbol = "line" } },
@@ -133,11 +132,11 @@ local function run()
   tour.show({ {
     file = "multi.lua", start = 1, ["end"] = 2, title = "Line", note = "One line, three calls",
     parts = { { start = 1, ["end"] = 2, note = "Sum", calls = {
-      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s", next = true,
+      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s", next = true, level = 1,
         callsite = { start = 1, ["end"] = 1, start_col = 21, end_col = 30, symbol = "second" } },
-      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f", next = true,
+      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f", next = true, level = 1,
         callsite = { start = 1, ["end"] = 1, start_col = 10, end_col = 18, symbol = "first" } },
-      { file = "multi.lua", start = 6, ["end"] = 6, title = "Third", note = "t", next = true,
+      { file = "multi.lua", start = 6, ["end"] = 6, title = "Third", note = "t", next = true, level = 1,
         callsite = { start = 1, ["end"] = 1, start_col = 33, end_col = 41, symbol = "third" } },
     } } },
   } }, { root = root .. "/app" })
@@ -152,7 +151,7 @@ local function run()
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = { { start = 1, ["end"] = 3, note = "Calls B", calls = {
-      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", next = true, calls = {
+      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", next = true, level = 1, calls = {
         { file = "main.lua", start = 1, ["end"] = 6, title = "Main again", note = "recursion", ref = true,
           callsite = { start = 8, ["end"] = 8, symbol = "main" } } },
         callsite = { start = 2, ["end"] = 2, symbol = "b" } } } },
@@ -167,8 +166,8 @@ local function run()
   tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = { { start = 1, ["end"] = 3, note = "Calls B", calls = {
-      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", next = true, calls = {
-        { file = "main.lua", start = 1, ["end"] = 6, title = "Main again", note = "recursion", next = true,
+      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B calls Main again", next = true, level = 1, calls = {
+        { file = "main.lua", start = 1, ["end"] = 6, title = "Main again", note = "recursion", next = true, level = 1,
           callsite = { start = 8, ["end"] = 8, symbol = "main" } } },
         callsite = { start = 2, ["end"] = 2, symbol = "b" } } } },
       { start = 4, ["end"] = 6, note = "Finish" } },
@@ -180,9 +179,9 @@ local function run()
   tour.show({ {
     file = "multi.lua", start = 1, ["end"] = 2, title = "Line", note = "One line, three calls",
     parts = { { start = 1, ["end"] = 2, note = "Sum", calls = {
-      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f", next = true,
+      { file = "multi.lua", start = 4, ["end"] = 4, title = "First", note = "f", next = true, level = 1,
         callsite = { start = 1, ["end"] = 1, start_col = 10, end_col = 18, symbol = "first" } },
-      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s", next = true,
+      { file = "multi.lua", start = 5, ["end"] = 5, title = "Second", note = "s", next = true, level = 1,
         callsite = { start = 1, ["end"] = 1, start_col = 21, end_col = 30, symbol = "second" } },
       { file = "multi.lua", start = 6, ["end"] = 6, title = "Third", note = "t",
         callsite = { start = 1, ["end"] = 1, start_col = 33, end_col = 41, symbol = "third" } },
@@ -221,10 +220,10 @@ local function run()
     parts = {
       { start = 1, ["end"] = 3, note = "Setup" },
       { start = 4, ["end"] = 6, note = "Calls B then C", calls = {
-        { file = "main.lua", start = 11, ["end"] = 12, title = "B", note = "B body", next = true,
+        { file = "main.lua", start = 11, ["end"] = 12, title = "B", note = "B body", next = true, level = 1,
           parts = { { start = 11, ["end"] = 11, note = "b1" }, { start = 12, ["end"] = 12, note = "b2" } },
           callsite = { start = 4, ["end"] = 4, symbol = "line" } },
-        { file = "main.lua", start = 14, ["end"] = 15, title = "C", note = "C body", next = true,
+        { file = "main.lua", start = 14, ["end"] = 15, title = "C", note = "C body", next = true, level = 1,
           callsite = { start = 5, ["end"] = 5, symbol = "line" } },
       } },
       { start = 7, ["end"] = 9, note = "Finish" },
@@ -250,7 +249,7 @@ local function run()
     parts = {
       { start = 1, ["end"] = 3, note = "First part" },
       { start = 4, ["end"] = 6, note = "Second part", calls = {
-        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+        { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true, level = 1,
           callsite = { start = 5, ["end"] = 5, symbol = "line" } } } },
     },
   } }, { root = root .. "/app" })
@@ -274,11 +273,11 @@ local function run()
   local shown = tour.show({ {
     file = "main.lua", start = 1, ["end"] = 6, title = "Main", note = "Main flow",
     parts = { { start = 1, ["end"] = 3, note = "Calls", calls = {
-      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true,
+      { file = "main.lua", start = 8, ["end"] = 9, title = "B", note = "B body", next = true, level = 1,
         callsite = { start = 2, ["end"] = 2, symbol = "line" } },
       { file = "main.lua", start = 11, ["end"] = 12, title = "C", note = "C body",
         callsite = { start = 3, ["end"] = 3, symbol = "line" }, parts = {},
-        calls = { { file = "main.lua", start = 14, ["end"] = 15, title = "E", note = "E body", next = true,
+        calls = { { file = "main.lua", start = 14, ["end"] = 15, title = "E", note = "E body", next = true, level = 1,
           callsite = { start = 11, ["end"] = 11, symbol = "line" } } } },
       { file = "main.lua", start = 17, ["end"] = 18, title = "D", lazy = true,
         callsite = { start = 3, ["end"] = 3, symbol = "line" } },
@@ -288,12 +287,6 @@ local function run()
   check(route.snippets == 2 and route.optional == 2 and route.lazy == 1, "Route summary counts walked, pruned and lazy snippets: " .. vim.inspect(route))
   check(#route.broken == 1 and route.broken[1].from == "C" and route.broken[1].to == "E",
     "A gold call below a call that is not walked is reported as a broken path: " .. vim.inspect(route.broken))
-  -- Turning the option off restores the older route.
-  tour.setup({ smooth_scroll = false, walk = false })
-  tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Plain", note = "n",
-    parts = { { start = 1, ["end"] = 2, note = "a" }, { start = 3, ["end"] = 4, note = "b" } } } }, { root = root .. "/app" })
-  tour.next_explanation(1)
-  check(titles() == "Plain.2", "walk = false uses the older route")
 end
 local ok, err = pcall(run)
 vim.fn.delete(root, "rf")

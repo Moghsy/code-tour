@@ -185,7 +185,7 @@ function M.build(state, stop, box)
     end
     local own, owner = index and numbers.by_stop[index], index and numbers.owner[index]
     if own then
-      counter = ("Snippet %d/%d"):format(own, #numbers.order)
+      counter = ("Snippet %s/%d"):format(stop.stream and stop.placeholder and "…" or tostring(own), #numbers.order)
     elseif owner then
       counter = ("Snippet %d/%d · optional"):format(owner, #numbers.order)
     else

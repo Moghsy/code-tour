@@ -541,6 +541,23 @@ function M.focus()
 end
 function M.list_snippets()
   local snapshot = stops.snapshot(s.stops)
+  -- Walk mode lists snippets in reading order, with optional branches right after the
+  -- snippet they hang off; storage order only breaks ties.
+  local numbers = walk_numbers_for_nav and walk_numbers_for_nav()
+  if numbers then
+    local rank = {}
+    for position, item in ipairs(snapshot) do
+      local index = locate(item.stop)
+      local own = index and numbers.by_stop[index]
+      rank[item] = { own or (index and numbers.owner[index]) or math.huge, own and 0 or 1, position }
+    end
+    table.sort(snapshot, function(a, b)
+      for k = 1, 3 do
+        if rank[a][k] ~= rank[b][k] then return rank[a][k] < rank[b][k] end
+      end
+      return false
+    end)
+  end
   vim.ui.select(snapshot, {
     prompt = "CodeTour snippets",
     format_item = function(item)
@@ -741,6 +758,10 @@ walk_move = function(delta)
   end
   s.walk_index, s.frames = index, {}
   position(steps[index])
+  local arrived = s.stops[steps[index].stop]
+  if arrived and arrived.stream and arrived.placeholder then
+    notify(("Still being written: %s"):format(arrived.title or "next snippet"), vim.log.levels.INFO)
+  end
   return true
 end
 -- The edge the next press of aj will follow from this box (if any), and the set of
@@ -877,7 +898,14 @@ route_summary = function()
       broken[#broken + 1] = { from = by_id[link.source].label, to = target.label }
     end
   end
-  return { snippets = snippets, boxes = #plan.steps, optional = optional, lazy = lazy, broken = broken, refs = #plan.refs }
+  local shadowed = {}
+  for _, item in ipairs(plan.shadowed or {}) do
+    shadowed[#shadowed + 1] = { from = (by_id[item.from] or {}).label, to = (by_id[item.to] or {}).label, level = item.level }
+  end
+  return {
+    snippets = snippets, boxes = #plan.steps, optional = optional, lazy = lazy, broken = broken, refs = #plan.refs,
+    levels = plan.max_depth, shadowed = shadowed,
+  }
 end
 walk_numbers_for_nav = walk_numbers
 
@@ -1390,6 +1418,7 @@ function M.expand_call(call)
         prompt = "Inspect call",
         format_item = function(item)
           return (item.title or item.file) .. (stops.ready(item) and " · enter" or " · generate explanation")
+            .. (item.why and (" · " .. item.why) or "")
         end,
       }, function(item)
         if item and current() == stop and select(2, current()) == box then M.expand_call(item) end
@@ -1470,6 +1499,8 @@ end
 function M.fill(id, input, opts)
   opts = opts or {}
   local request = assert(s.pending[id], "Unknown or completed explain request " .. tostring(id))
+  -- A streamed snippet is written where its placeholder is, so the route never changes behind the reader.
+  assert(not (request.stream and (opts.after or opts.into)), "Streamed snippets are filled in place: omit --after/--into")
   if request.kind == "saved" then return saved.accept(s, request, input, opts) end
   if request.lookup and type(input) == "table" and input.unresolved ~= nil then
     assert(type(input.unresolved) == "string" and input.unresolved:find("%S"), "Supply an unresolved-symbol reason")
@@ -1650,7 +1681,7 @@ function M.fill(id, input, opts)
     for _, root in ipairs(roots) do
       root._parent_stop, root._parent_box = target_stop._parent_stop, target_stop._parent_box
       root.callsite = target_stop.callsite
-      root.next, root.spine = target_stop.next, target_stop.spine
+      root.next, root.level = target_stop.next, target_stop.level
     end
     for n, stop in ipairs(data) do
       table.insert(s.stops, i + n - 1, stop)

@@ -43,7 +43,7 @@ local function run()
   tour.setup({ smooth_scroll = false })
   local shown = tour.show({
     { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
-      { file = "main.lua", start = 6, ["end"] = 8, title = "B", next = true, spine = true, pending = true,
+      { file = "main.lua", start = 6, ["end"] = 8, title = "B", next = true, level = 0, pending = true,
         callsite = { start = 2, ["end"] = 2, symbol = "line" } } } },
     { file = "main.lua", start = 18, ["end"] = 20, title = "E", pending = true },
   }, { root = root })
@@ -57,6 +57,10 @@ local function run()
   tour.next_explanation(1)
   check(title() == "B", "Reader can step onto a pending snippet")
   check(tour.state().stops[tour.state().stop].placeholder, "It is still a placeholder")
+  check(header():find("Snippet …/", 1, true), "A pending snippet is numbered as … : " .. header())
+  check(notes[#notes]:find("Still being written", 1, true), "Arriving on it says it is still being written: " .. tostring(notes[#notes]))
+  local refused = not pcall(tour.fill, shown.pending[1].id, { { file = "main.lua", start = 6, ["end"] = 8, note = "x" } }, { after = "1" })
+  check(refused, "A streamed fill cannot be placed elsewhere")
   -- The agent fills B (and announces C as pending below it); the reader waiting on B lands on it.
   local filled = tour.fill(shown.pending[1].id, {
     { file = "main.lua", start = 6, ["end"] = 8, title = "B", note = "B is written now", calls = {
@@ -66,7 +70,7 @@ local function run()
   check(not tour.state().stops[tour.state().stop].placeholder and title() == "B", "Reader stays on B, now written")
   local s = tour.state()
   check(s.stops[s.stop].note == "B is written now", "B carries its explanation")
-  check(s.stops[s.stop].spine == true and s.stops[s.stop].next == true, "Gold and spine marks survive the fill")
+  check(s.stops[s.stop].level == 0 and s.stops[s.stop].next == true, "Gold and level marks survive the fill")
   local w2 = walk_titles(); check(w2 == "A B C B A E", "The walk grows as fills arrive: " .. w2)
   -- A fill that arrives while the reader is elsewhere does not move them.
   tour.next_explanation(-20)

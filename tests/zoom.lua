@@ -82,8 +82,8 @@ local function run()
   -- The agent's route report ignores the zoom: it describes what was authored.
   tour.zoom(1)
   check(tour.state().zoom == 2, "Zoom level kept")
-  -- Spine calls never fold: only branches off the spine do.
-  local function sp(c) c.spine = true; return c end
+  -- Explicit levels: level 0 calls never fold, whatever their depth.
+  local function sp(c) c.level = 0; return c end
   tour.show({
     { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
       sp(call(6, 8, "B", 2, { sp(call(10, 12, "C", 7, { sp(call(14, 16, "D", 11)) })) })),
@@ -94,12 +94,27 @@ local function run()
   tour.zoom(-1)
   local s1 = walk_titles(); check(s1 == "A B C D C B A X A E", "Depth 1 folds only Y: " .. s1)
   tour.zoom(-1)
-  local s0 = walk_titles(); check(tour.state().zoom == 0 and s0 == "A B C D C B A E", "Level 0 is the spine alone: " .. s0)
+  local s0 = walk_titles(); check(tour.state().zoom == 0 and s0 == "A B C D C B A E", "Level 0 is the essential path alone: " .. s0)
   tour.zoom(-1)
-  check(tour.state().zoom == 0, "Zoom stops at the spine")
+  check(tour.state().zoom == 0, "Zoom stops at level 0")
   tour.zoom(1)
   tour.zoom(1)
   check(tour.state().zoom == nil, "Back to full detail")
+  -- The route report gives the deepest level and flags calls that claim a level above their parent.
+  local shown2 = tour.show({
+    { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
+      call(6, 8, "B", 2, { call(10, 12, "C", 7) }) } },
+  }, { root = root })
+  check(shown2.route.levels == 2 and #shown2.route.shadowed == 0, "Report: deepest level 2, nothing shadowed")
+  local shown3 = tour.show({
+    { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
+      call(6, 8, "B", 2, { sp(call(10, 12, "C", 7)) }) } },
+  }, { root = root })
+  check(#shown3.route.shadowed == 1 and shown3.route.shadowed[1].to == "C", "A level 0 call under a level 1 call is reported as shadowed")
+  -- A call may carry a why, a skipped call a reason the reader can see.
+  check(pcall(tour.show, { { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
+    { file = "main.lua", start = 6, ["end"] = 8, title = "log", lazy = true, why = "logging helper",
+      callsite = { start = 2, ["end"] = 2, symbol = "line" } } } } }, { root = root }), "A lazy call can say why it was skipped")
   -- A new tour resets the zoom.
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Fresh", note = "x" } }, { root = root })
   check(tour.state().zoom == nil, "A new tour starts unfolded")

@@ -72,7 +72,7 @@ function M.build(state, id_of, tour)
       link(from.id, to.id, stop.next and "next" or "optional", {
         via = "call",
         ref = stop.ref or nil,
-        spine = stop.spine or nil,
+        level = stop.level,
         from_box = id_of(stop._parent_stop, stop._parent_box),
         symbol = site and site.symbol or nil,
         callsite = site and { start = site.start, ["end"] = site["end"], start_col = site.start_col, end_col = site.end_col } or nil,

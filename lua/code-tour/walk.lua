@@ -11,8 +11,9 @@
 -- or out of the snippet). Moving between top-level snippets is not a call and has
 -- no return.
 --
--- Depth here counts branches off the spine: a call marked `spine` adds nothing, any
--- other call adds one. Without spine marks it is plain call depth.
+-- Every walked snippet has a level: top-level snippets are 0, and a gold call has the
+-- `level` its author gave it, else one more than the snippet it hangs off. Zoom folds
+-- the calls whose level is above the chosen one, so level 0 is the essential path.
 --
 -- A gold edge becomes a reference (never walked) when:
 --   * it is marked `ref`, or
@@ -35,6 +36,10 @@ local function out_edges(graph)
   return by_node
 end
 
+local function level_of(link, depth)
+  return link.level or (depth or 0) + 1
+end
+
 -- Returns { steps = {...}, refs = {...} }, or nil, error when nested too deeply.
 -- step = { node, box, kind = "root" | "enter" | "box" | "return", via? }
 function M.plan(graph, opts)
@@ -44,7 +49,7 @@ function M.plan(graph, opts)
     nodes[node.id] = node
   end
   local edges = out_edges(graph)
-  local steps, refs, folded = {}, {}, {}
+  local steps, refs, folded, shadowed = {}, {}, {}, {}
   local deepest = 0
   local state, path = {}, {}
 
@@ -85,11 +90,15 @@ function M.plan(graph, opts)
       local walk = {}
       for _, item in ipairs(items) do
         local target = item.link.target
+        -- A call whose level is below the snippet it hangs off folds with that snippet,
+        -- so it is not part of the essential path it claims to be on.
+        if item.link.via == "call" and item.link.level and item.link.level < (depth or 0) then
+          shadowed[#shadowed + 1] = { from = id, to = target, level = item.link.level, parent = depth or 0 }
+        end
         if item.link.ref then
           refs[#refs + 1] = { from = id, to = target, why = "marked" }
-        elseif opts.max_depth and item.link.via == "call" and not item.link.spine and (depth or 0) + 1 > opts.max_depth then
+        elseif opts.max_depth and item.link.via == "call" and level_of(item.link, depth) > opts.max_depth then
           -- Zoomed out: a branch below the chosen level is folded, like an optional one.
-          -- Spine calls never fold: the end-to-end path stays whole.
           folded[#folded + 1] = { source = id, target = target, from_box = item.link.from_box,
             symbol = item.link.symbol, callsite = item.link.callsite }
         elseif nodes[target] and nodes[target].lazy then
@@ -115,7 +124,7 @@ function M.plan(graph, opts)
         if state[item.link.target] then
           refs[#refs + 1] = { from = id, to = item.link.target, why = "shared" }
         else
-          local ok, problem = visit(item.link.target, "enter", item.link, (depth or 0) + (item.link.via == "call" and not item.link.spine and 1 or 0))
+          local ok, problem = visit(item.link.target, "enter", item.link, item.link.via == "call" and level_of(item.link, depth) or (depth or 0))
           if not ok then
             return nil, problem
           end
@@ -205,7 +214,7 @@ function M.plan(graph, opts)
       end
     end
   end
-  return { steps = steps, refs = refs, folded = folded, max_depth = deepest }
+  return { steps = steps, refs = refs, folded = folded, shadowed = shadowed, max_depth = deepest }
 end
 
 -- A cursor over a plan. Walking back up is just stepping backwards: the

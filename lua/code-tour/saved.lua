@@ -128,9 +128,9 @@ function M.revalidate(state)
         end_col = capture.range["end"][2],
         symbol = edge.symbol,
       }
-      edge.runtime.next = edge.next
+      edge.runtime.next, edge.runtime.level = edge.next, edge.level
     else
-      edge.runtime.callsite, edge.runtime.next = nil, nil
+      edge.runtime.callsite, edge.runtime.next, edge.runtime.level = nil, nil, nil
     end
   end
 end
@@ -269,10 +269,10 @@ function M.export(state, opts)
       local capture = source.capture(parent.buf, r)
       if capture then
         result.callsite = { symbol = site.symbol or "", locator = capture.locator }
-        result.next = stop.next
+        result.next, result.level = stop.next, stop.level
       end
     elseif old then
-      result.callsite, result.next = vim.deepcopy(old.callsite), old.next
+      result.callsite, result.next, result.level = vim.deepcopy(old.callsite), old.next, old.level
     end
     return result
   end
@@ -404,6 +404,7 @@ function M.prepare(record, opts)
             symbol = item.callsite.symbol,
             runtime = runtime,
             next = item.next,
+            level = item.level,
           }
           plan.edges[#plan.edges + 1] = edge
         end
@@ -499,6 +500,7 @@ function M.sync(state)
             symbol = item.callsite.symbol,
             runtime = runtime,
             next = item.next,
+            level = item.level,
           }
         end
       end

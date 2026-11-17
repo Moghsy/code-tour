@@ -82,6 +82,24 @@ local function run()
   -- The agent's route report ignores the zoom: it describes what was authored.
   tour.zoom(1)
   check(tour.state().zoom == 2, "Zoom level kept")
+  -- Spine calls never fold: only branches off the spine do.
+  local function sp(c) c.spine = true; return c end
+  tour.show({
+    { file = "main.lua", start = 1, ["end"] = 4, title = "A", note = "A", calls = {
+      sp(call(6, 8, "B", 2, { sp(call(10, 12, "C", 7, { sp(call(14, 16, "D", 11)) })) })),
+      call(22, 24, "X", 3, { call(26, 28, "Y", 23) }) } },
+    { file = "main.lua", start = 18, ["end"] = 20, title = "E", note = "E" },
+  }, { root = root })
+  local sw = walk_titles(); check(sw == "A B C D C B A X Y X A E", "Spine full walk: " .. sw)
+  tour.zoom(-1)
+  local s1 = walk_titles(); check(s1 == "A B C D C B A X A E", "Depth 1 folds only Y: " .. s1)
+  tour.zoom(-1)
+  local s0 = walk_titles(); check(tour.state().zoom == 0 and s0 == "A B C D C B A E", "Level 0 is the spine alone: " .. s0)
+  tour.zoom(-1)
+  check(tour.state().zoom == 0, "Zoom stops at the spine")
+  tour.zoom(1)
+  tour.zoom(1)
+  check(tour.state().zoom == nil, "Back to full detail")
   -- A new tour resets the zoom.
   tour.show({ { file = "main.lua", start = 1, ["end"] = 4, title = "Fresh", note = "x" } }, { root = root })
   check(tour.state().zoom == nil, "A new tour starts unfolded")

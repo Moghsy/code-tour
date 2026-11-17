@@ -11,6 +11,9 @@
 -- or out of the snippet). Moving between top-level snippets is not a call and has
 -- no return.
 --
+-- Depth here counts branches off the spine: a call marked `spine` adds nothing, any
+-- other call adds one. Without spine marks it is plain call depth.
+--
 -- A gold edge becomes a reference (never walked) when:
 --   * it is marked `ref`, or
 --   * its target is on the current path (recursion or a loop), or
@@ -84,8 +87,9 @@ function M.plan(graph, opts)
         local target = item.link.target
         if item.link.ref then
           refs[#refs + 1] = { from = id, to = target, why = "marked" }
-        elseif opts.max_depth and item.link.via == "call" and (depth or 0) + 1 > opts.max_depth then
-          -- Zoomed out: a call below the chosen depth is folded, like an optional one.
+        elseif opts.max_depth and item.link.via == "call" and not item.link.spine and (depth or 0) + 1 > opts.max_depth then
+          -- Zoomed out: a branch below the chosen level is folded, like an optional one.
+          -- Spine calls never fold: the end-to-end path stays whole.
           folded[#folded + 1] = { source = id, target = target, from_box = item.link.from_box,
             symbol = item.link.symbol, callsite = item.link.callsite }
         elseif nodes[target] and nodes[target].lazy then
@@ -111,7 +115,7 @@ function M.plan(graph, opts)
         if state[item.link.target] then
           refs[#refs + 1] = { from = id, to = item.link.target, why = "shared" }
         else
-          local ok, problem = visit(item.link.target, "enter", item.link, (depth or 0) + (item.link.via == "call" and 1 or 0))
+          local ok, problem = visit(item.link.target, "enter", item.link, (depth or 0) + (item.link.via == "call" and not item.link.spine and 1 or 0))
           if not ok then
             return nil, problem
           end

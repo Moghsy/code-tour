@@ -144,6 +144,9 @@ The `show` result reports the route: `route: {snippets, boxes, optional, lazy, b
 
 ### The reader can zoom
 
+Mark every gold call on the end-to-end path `spine:true` (it needs `next:true`). The reader's zoom never folds a spine call, so level 0 is the whole path from entry to final effect; other gold calls fold by how many non-spine calls lie above them. Without spine marks the zoom falls back to plain call depth.
+
+
 `<leader>a-` and `<leader>a+` fold and unfold the walk by call depth in the editor, with no request to you: folded gold calls are not walked until the reader zooms back in or opens them with `ad`. This only hides what you already prepared, so author the spine at full depth and let the reader fold it; do not bake a shallow route into a tour the reader may want to deepen. Folded snippets still count in the `route` you receive.
 
 ### Parts can nest

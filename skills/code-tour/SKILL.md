@@ -142,6 +142,10 @@ Rough targets for the walked route: overview, 4-8 snippets, overview boxes only 
 
 The `show` result reports the route: `route: {snippets, boxes, optional, lazy, broken, refs}`, where `snippets` and `boxes` are what `aj` will walk, `optional` and `lazy` what you pruned, and `broken` lists gold calls that sit below an unwalked call (`{from, to}`). When `snippets` is well above the target for the requested level, demote branches and send the tour again; when `broken` is not empty, either promote the parent call to gold or demote the child, then send it again.
 
+### Streaming an end-to-end tour
+
+For a long end-to-end tour, send a skeleton first and write the rest while the reader walks it. Plan the spine from the code graph, then `show` the first snippets prepared and the later ones as `{file,start,end,title,next,spine,callsite,pending:true}` with no note, parts or calls. The result lists `pending` entries in walk order, each with a `command`; fill them one at a time in that order through that command, as for any `--fill`. A callee's caller needs only its contract (signature, result, effects), not the callee's explanation, so you can write top-down. A fill may announce deeper `pending` calls; they are returned in the fill result. Never insert before the reader's position, and write the overview last when it needs the whole story.
+
 ### The reader can zoom
 
 Mark every gold call on the end-to-end path `spine:true` (it needs `next:true`). The reader's zoom never folds a spine call, so level 0 is the whole path from entry to final effect; other gold calls fold by how many non-spine calls lie above them. Without spine marks the zoom falls back to plain call depth.

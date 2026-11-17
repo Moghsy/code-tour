@@ -13,7 +13,7 @@ end
 function M.build(state, id_of, tour)
   local nodes, by_key, stop_node = {}, {}, {}
   for i, stop in ipairs(state.stops) do
-    if not stop.placeholder and stop.path then
+    if (not stop.placeholder or stop.stream) and stop.path then
       local id = key(stop)
       local node = by_key[id]
       if not node then
@@ -26,6 +26,7 @@ function M.build(state, id_of, tour)
           start = stop.start,
           ["end"] = stop["end"],
           lazy = true,
+          pending = true,
           stops = {},
           boxes = {},
         }
@@ -33,6 +34,7 @@ function M.build(state, id_of, tour)
         nodes[#nodes + 1] = node
       end
       node.lazy = node.lazy and stop.lazy or false
+      node.pending = node.pending and stop.stream == true
       node.stops[#node.stops + 1] = i
       stop_node[stop] = node
       for k, box in ipairs(stops.boxes(stop)) do

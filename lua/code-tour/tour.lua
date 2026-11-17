@@ -256,6 +256,40 @@ render = function(jump)
   end
 end
 
+local function command(action)
+  local cli = s.cli or (vim.fn.stdpath("config") .. "/local-plugins/code-tour.nvim/bin/code-tour")
+  return vim.fn.shellescape(cli)
+    .. " --"
+    .. action
+    .. " --pane "
+    .. vim.fn.shellescape(vim.v.servername)
+    .. " --tour "
+    .. s.id
+end
+local function request_id()
+  return vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
+end
+
+-- Turn the `pending` stops of a payload into placeholders the agent fills later, in walk
+-- order. Returns the list the agent needs ({id, file, start, end, title, command}), or nil.
+local function register_pending(data)
+  local list = {}
+  local snapshot
+  for _, stop in ipairs(data) do
+    if stop.pending then
+      snapshot = snapshot or stops.snapshot(s.stops)
+      local id = request_id()
+      stop.pending, stop.placeholder, stop.stream = nil, id, true
+      s.pending[id] = { kind = "stream", stream = true, placeholder = stop, snapshot = snapshot }
+      list[#list + 1] = {
+        id = id, file = stop.file, start = stop.start, ["end"] = stop["end"], title = stop.title,
+        command = command("fill " .. id),
+      }
+    end
+  end
+  return #list > 0 and list or nil
+end
+
 local function prepare(input, root, review, base)
   local data = stops.normalize(input, root)
   if review then
@@ -331,7 +365,11 @@ function M.show(input, opts)
   end
   local base = opts.base or (append and s.base or nil)
   local data = prepare(input, root, review, base)
+  -- Snippets marked `pending` are streamed: shown as placeholders on the route, then
+  -- filled in by the agent in walk order (see M.fill).
   local result = activate(data, opts, root, append, review, base)
+  result.pending = register_pending(data)
+  if result.pending then render(false) end
   saved.sync(s)
   result.route = route_summary()
   return result
@@ -542,16 +580,6 @@ local function box_id(stop, box)
   local i, k = locate(stop, box)
   assert(i, "Box no longer exists")
   return i .. "." .. k
-end
-local function command(action)
-  local cli = s.cli or (vim.fn.stdpath("config") .. "/local-plugins/code-tour.nvim/bin/code-tour")
-  return vim.fn.shellescape(cli)
-    .. " --"
-    .. action
-    .. " --pane "
-    .. vim.fn.shellescape(vim.v.servername)
-    .. " --tour "
-    .. s.id
 end
 -- Path of the file that describes this tour: the saved library entry, else the tmp tour file.
 local function tour_path()
@@ -1058,9 +1086,6 @@ function M.answer(text, id)
   return { answered = id }
 end
 
-local function request_id()
-  return vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
-end
 
 function M.explain_range(selection, context, action)
   if not generation(function() M.explain_range(selection, context, action) end) then return end
@@ -1625,7 +1650,7 @@ function M.fill(id, input, opts)
     for _, root in ipairs(roots) do
       root._parent_stop, root._parent_box = target_stop._parent_stop, target_stop._parent_box
       root.callsite = target_stop.callsite
-      root.next = target_stop.next
+      root.next, root.spine = target_stop.next, target_stop.spine
     end
     for n, stop in ipairs(data) do
       table.insert(s.stops, i + n - 1, stop)
@@ -1648,7 +1673,7 @@ function M.fill(id, input, opts)
   -- A lazy response may finish after the reader has already continued. Keep
   -- their current box unless they are still waiting at this call's origin.
   local waiting = request.enter and s.awaiting == id and selected_stop == request.stop and selected_box == request.box
-  local navigate = not typing() and (not request.call or waiting)
+  local navigate = not typing() and (not (request.call or request.stream) or waiting)
   if s.awaiting == id then s.awaiting = nil end
   if navigate then
     if request.call and waiting and not opts.into and not opts.after then
@@ -1664,7 +1689,7 @@ function M.fill(id, input, opts)
     end
     if typing() then s.arrival = { stop = target_stop, box = insertion } end
   end
-  return { filled = id, count = #data, navigate = navigate }
+  return { filled = id, count = #data, navigate = navigate, pending = register_pending(data) }
 end
 
 function M.load(path)

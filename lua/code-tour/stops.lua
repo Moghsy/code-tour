@@ -174,6 +174,13 @@ function M.normalize(input, root)
     assert(not stop.next or not stop.lazy, "Next calls require a prepared explanation")
     assert(stop.spine == nil or type(stop.spine) == "boolean", "spine must be a boolean")
     assert(not stop.spine or stop.next, "Only a next call can be on the spine")
+    assert(stop.pending == nil or type(stop.pending) == "boolean", "pending must be a boolean")
+    assert(not stop.pending or not stop.lazy, "A pending snippet is written later; it is not lazy")
+    if stop.pending then
+      assert(not stop.parts or #stop.parts == 0, "Pending snippets must omit parts")
+      assert(not stop.calls or #stop.calls == 0, "Pending snippets must omit nested calls")
+      stop.note = stop.note or "Being written…"
+    end
     assert(stop.ref == nil or type(stop.ref) == "boolean", "ref must be a boolean")
     assert(not stop.ref or parent_box, "Only a call branch can be a ref")
     if stop.lazy then
@@ -345,7 +352,8 @@ function M.ready(call)
     for _, box in ipairs(M.boxes(call)) do if not box._unlocated then located = true end end
     if not located then return false end
   end
-  return not call.lazy and not call.placeholder
+  -- A streamed snippet that is still being written is on the route, showing its placeholder.
+  return not call.lazy and (not call.placeholder or call.stream == true)
 end
 
 -- Gold calls join the reading order after their owning explanation, then return

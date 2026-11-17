@@ -13,6 +13,12 @@ function M.highlight()
   vim.api.nvim_set_hl(0, "CodeTourCurrentLabel", {
     fg = "#6fd08c", ctermfg = 114, bold = true,
   })
+  vim.api.nvim_set_hl(0, "CodeTourFoldedCall", {
+    fg = "#bfb08a", bg = "#3d3622", ctermfg = 144, ctermbg = 58,
+  })
+  vim.api.nvim_set_hl(0, "CodeTourFoldedLabel", {
+    fg = "#9a8a5a", ctermfg = 101,
+  })
   vim.api.nvim_set_hl(0, "CodeTourDoneCall", {
     fg = "#e8def7", bg = "#6a4f8f", ctermfg = 189, ctermbg = 97, bold = true,
   })
@@ -51,8 +57,8 @@ end
 -- Replace the rendered glyphs with identical source text on a solid badge
 -- background. A range highlight alone inherits the tour's blue line background.
 -- `next_call` marks a gold call; `current` is the gold call the walk takes next.
-function M.draw(buf, ns, first_row, first_col, last_row, last_col, next_call, current, done)
-  local group = current and "CodeTourCurrentCall" or done and "CodeTourDoneCall"
+function M.draw(buf, ns, first_row, first_col, last_row, last_col, next_call, current, done, folded)
+  local group = current and "CodeTourCurrentCall" or done and "CodeTourDoneCall" or folded and "CodeTourFoldedCall"
     or next_call and "CodeTourNextCall" or "CodeTourCall"
   for row = first_row, last_row do
     local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
@@ -71,7 +77,7 @@ function M.draw(buf, ns, first_row, first_col, last_row, last_col, next_call, cu
   end
   if next_call then
     vim.api.nvim_buf_set_extmark(buf, ns, last_row, 0, {
-      virt_text = { done and { "  <- visited", "CodeTourDoneLabel" }
+      virt_text = { folded and { "  <- folded (a+ to open)", "CodeTourFoldedLabel" } or done and { "  <- visited", "CodeTourDoneLabel" }
         or { current ~= false and "  <- next snippet" or "  <- later snippet", current and "CodeTourCurrentLabel" or "CodeTourNextLabel" } }, virt_text_pos = "eol", priority = 1000,
     })
   end

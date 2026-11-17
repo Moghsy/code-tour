@@ -142,6 +142,10 @@ Rough targets for the walked route: overview, 4-8 snippets, overview boxes only 
 
 The `show` result reports the route: `route: {snippets, boxes, optional, lazy, broken, refs}`, where `snippets` and `boxes` are what `aj` will walk, `optional` and `lazy` what you pruned, and `broken` lists gold calls that sit below an unwalked call (`{from, to}`). When `snippets` is well above the target for the requested level, demote branches and send the tour again; when `broken` is not empty, either promote the parent call to gold or demote the child, then send it again.
 
+### The reader can zoom
+
+`<leader>a-` and `<leader>a+` fold and unfold the walk by call depth in the editor, with no request to you: folded gold calls are not walked until the reader zooms back in or opens them with `ad`. This only hides what you already prepared, so author the spine at full depth and let the reader fold it; do not bake a shallow route into a tour the reader may want to deepen. Folded snippets still count in the `route` you receive.
+
 ### Parts can nest
 
 A part may itself have `parts`, which refine it: each level must cover its parent's range exactly, with no gaps and nothing outside it, to a depth of eight. Use sub-parts only for long or dense parts that a single paragraph cannot explain; a short part needs none, and a long part is often better as its own snippet reached by a call. `aj` walks the tree depth-first (overview, part 1, its sub-parts, part 2, ...). Box IDs in requests stay `S.K`, numbered in that same depth-first order, and the reader sees paths like `Part 2.1`. In a `[code-tour refine]` reply covering a whole part, the returned parts become that part's children; a reply covering only some of the part's lines is added next to it. Saved tours currently store parts flat, so on reopening the nesting is lost but the order and ranges are kept.

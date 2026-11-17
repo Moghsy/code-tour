@@ -191,6 +191,9 @@ function M.build(state, stop, box)
     else
       counter = "Optional snippet"
     end
+    if (numbers.folded or 0) > 0 then
+      counter = counter .. (" · +%d folded"):format(numbers.folded)
+    end
   end
   if state.box > 1 then
     if stops.nested(stop) then

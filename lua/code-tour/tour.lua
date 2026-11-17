@@ -45,7 +45,7 @@ local function locate(stop, box)
     end
   end
 end
-local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key, walk_steps, walk_index, route_summary -- defined once the graph helpers exist
+local walk_move, walk_upcoming, walk_numbers_for_nav, edge_key, walk_steps, walk_index, route_summary, plan_walk -- defined once the graph helpers exist
 local function reset_pages()
   s.page, s.note_page = 1, 1
 end
@@ -143,9 +143,9 @@ local function decorate(stop, box, layout)
       })
     end
   end
-  local upcoming, done = nil, {}
+  local upcoming, done, folded = nil, {}, {}
   if walk_upcoming then
-    upcoming, done = walk_upcoming(stop, box)
+    upcoming, done, folded = walk_upcoming(stop, box)
   end
   -- Call badges stay visible whichever box is focused: every prepared call of this
   -- snippet, and of the other snippets shown in the same buffer.
@@ -165,7 +165,9 @@ local function decorate(stop, box, layout)
           end
           local finished = s.opts and s.opts.walk and call.next == true and not current
             and done[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
-          badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current, finished)
+          local is_folded = s.opts and s.opts.walk and call.next == true and not current and not finished
+            and folded[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
+          badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current, finished, is_folded)
         end
       end
     end
@@ -291,7 +293,7 @@ local function activate(data, opts, root, append, review, base)
     composer.clear()
     s.arrival = nil
     s.id = vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
-    s.stops, s.pending, s.questions, s.frames, s.walk_index = {}, {}, {}, {}, nil
+    s.stops, s.pending, s.questions, s.frames, s.walk_index, s.zoom = {}, {}, {}, {}, nil, nil
     s.stop, s.box = 1, 1
   end
   clear_intent()
@@ -639,8 +641,14 @@ end
 -- The graph drives reading order: depth-first over every edge, coming back to a
 -- snippet between its edges (see walk.lua). Returns false to fall back to the
 -- older route (e.g. when the graph has a cycle), after saying why.
+-- The walk plan for the tour, limited to the zoom depth unless `unzoomed` is set.
+plan_walk = function(unzoomed)
+  local graph = build_graph()
+  local plan, err = require("code-tour.walk").plan(graph, { max_depth = not unzoomed and s.zoom or nil })
+  return plan, err, graph
+end
 walk_steps = function()
-  local plan, err = require("code-tour.walk").plan(build_graph())
+  local plan, err = plan_walk()
   if not plan then
     return nil, err
   end
@@ -653,7 +661,7 @@ walk_steps = function()
       steps[#steps + 1] = { stop = tonumber(si), box = tonumber(ki), id = step.box, kind = step.kind, via = step.via }
     end
   end
-  return steps
+  return steps, nil, plan
 end
 -- Index of the step the reader is on: the remembered one when it still matches, else the first.
 walk_index = function(steps)
@@ -714,14 +722,19 @@ edge_key = function(source, site)
 end
 walk_upcoming = function(stop, box)
   if not (s.opts and s.opts.walk) then
-    return nil, {}
+    return nil, {}, {}
   end
-  local steps = walk_steps()
+  local steps, _, plan = walk_steps()
   if not steps then
-    return nil, {}
+    return nil, {}, {}
   end
   local index = walk_index(steps)
-  local done = {}
+  local done, folded = {}, {}
+  for _, f in ipairs(plan.folded or {}) do
+    if f.callsite then
+      folded[edge_key(f.source, { symbol = f.symbol, start = f.callsite.start, start_col = f.callsite.start_col })] = true
+    end
+  end
   -- Edges walked up to and including the current step: being inside a callee counts too.
   for n = 1, index or 0 do
     local via = steps[n].via
@@ -732,10 +745,10 @@ walk_upcoming = function(stop, box)
   -- The next snippet is the next edge the walk enters, whichever box it leaves from.
   for n = (index or #steps) + 1, #steps do
     if steps[n].kind == "enter" and steps[n].via then
-      return steps[n].via, done
+      return steps[n].via, done, folded
     end
   end
-  return nil, done
+  return nil, done, folded
 end
 
 -- In walk mode snippets are numbered in the order the walk first reaches them.
@@ -746,8 +759,7 @@ local function walk_numbers()
   if not (s.opts and s.opts.walk) or #s.stops == 0 then
     return nil
   end
-  local graph = build_graph()
-  local plan = require("code-tour.walk").plan(graph)
+  local plan, _, graph = plan_walk()
   if not plan then
     return nil
   end
@@ -783,7 +795,20 @@ local function walk_numbers()
     end
     owner[i] = at and by_stop[index_of[at]] or nil
   end
-  return { by_stop = by_stop, owner = owner, order = order }
+  -- How many snippets the zoom hides from the walk.
+  local folded = 0
+  if s.zoom then
+    local full = require("code-tour.walk").plan(graph)
+    local seen = {}
+    for _, step in ipairs(full and full.steps or {}) do
+      if (step.kind == "root" or step.kind == "enter") and not seen[step.node] then
+        seen[step.node] = true
+        folded = folded + 1
+      end
+    end
+    folded = math.max(0, folded - #order)
+  end
+  return { by_stop = by_stop, owner = owner, order = order, folded = folded }
 end
 s.snippet_numbers = walk_numbers
 
@@ -794,8 +819,7 @@ route_summary = function()
   if not (s.opts and s.opts.walk) or #s.stops == 0 then
     return nil
   end
-  local graph = build_graph()
-  local plan = require("code-tour.walk").plan(graph)
+  local plan, _, graph = plan_walk(true)
   if not plan then
     return nil
   end
@@ -828,6 +852,50 @@ route_summary = function()
   return { snippets = snippets, boxes = #plan.steps, optional = optional, lazy = lazy, broken = broken, refs = #plan.refs }
 end
 walk_numbers_for_nav = walk_numbers
+
+-- a- / a+ : fold or unfold the walk by call depth, using only what is already authored.
+-- Folded calls are not walked (they behave like optional ones) and are marked on screen.
+function M.zoom(delta)
+  if #s.stops == 0 then
+    return
+  end
+  if not (s.opts and s.opts.walk) then
+    notify("Zoom needs the graph walk (walk = true)")
+    return
+  end
+  local full, err = plan_walk(true)
+  if not full then
+    notify(err, vim.log.levels.WARN)
+    return
+  end
+  local before = walk_numbers()
+  local level = (s.zoom or full.max_depth) + delta
+  if level >= full.max_depth then
+    s.zoom = nil
+  else
+    s.zoom = math.max(0, level)
+  end
+  local after = walk_numbers()
+  -- A reader inside a branch that just folded goes back to the nearest snippet still on the walk.
+  if before and after and before.by_stop[s.stop] and not after.by_stop[s.stop] then
+    local at = s.stops[s.stop]
+    local index_of = {}
+    for i, stop in ipairs(s.stops) do
+      index_of[stop] = i
+    end
+    while at and not after.by_stop[index_of[at]] do
+      at = at._parent_stop
+    end
+    if at then
+      s.stop, s.box = index_of[at], stops.first_box(at)
+    end
+  end
+  s.walk_index, s.frames = nil, {}
+  reset_pages()
+  render(true)
+  notify(("Detail: %s (%d folded)"):format(s.zoom and ("depth " .. s.zoom) or "full", after and after.folded or 0),
+    vim.log.levels.INFO)
+end
 
 -- Write the tour graph (nodes = snippets, links = next/optional routes) and return its path.
 function M.graph()
@@ -1694,6 +1762,12 @@ function M.setup(opts)
     af = M.focus,
     aq = M.stop,
     az = M.recenter,
+    ["a-"] = function()
+      M.zoom(-1)
+    end,
+    ["a+"] = function()
+      M.zoom(1)
+    end,
     ["a]"] = function()
       M.page(1)
     end,
@@ -1729,6 +1803,8 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("CodeTourLoad", function(args)
     M.load(args.args ~= "" and args.args or nil)
   end, { nargs = "?", complete = "file", force = true })
+  vim.api.nvim_create_user_command("CodeTourZoomOut", function() M.zoom(-1) end, { force = true })
+  vim.api.nvim_create_user_command("CodeTourZoomIn", function() M.zoom(1) end, { force = true })
   vim.api.nvim_create_user_command("CodeTourGraph", function()
     local ok, result = pcall(M.graph)
     notify(ok and ("Tour graph: " .. result.path) or result, ok and vim.log.levels.INFO or vim.log.levels.WARN)

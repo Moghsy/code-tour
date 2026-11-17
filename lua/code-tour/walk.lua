@@ -33,13 +33,15 @@ end
 
 -- Returns { steps = {...}, refs = {...} }, or nil, error when nested too deeply.
 -- step = { node, box, kind = "root" | "enter" | "box" | "return", via? }
-function M.plan(graph)
+function M.plan(graph, opts)
+  opts = opts or {}
   local nodes = {}
   for _, node in ipairs(graph.nodes) do
     nodes[node.id] = node
   end
   local edges = out_edges(graph)
-  local steps, refs = {}, {}
+  local steps, refs, folded = {}, {}, {}
+  local deepest = 0
   local state, path = {}, {}
 
   local function boxes_of(node)
@@ -50,7 +52,9 @@ function M.plan(graph)
   end
 
   local visit
-  visit = function(id, kind, via)
+  visit = function(id, kind, via, depth)
+    depth = depth or 0
+    deepest = math.max(deepest, depth)
     local node = nodes[id]
     if #path >= MAX_DEPTH then
       return nil, "Tour is nested deeper than " .. MAX_DEPTH
@@ -79,6 +83,10 @@ function M.plan(graph)
         local target = item.link.target
         if item.link.ref then
           refs[#refs + 1] = { from = id, to = target, why = "marked" }
+        elseif opts.max_depth and item.link.via == "call" and (depth or 0) + 1 > opts.max_depth then
+          -- Zoomed out: a call below the chosen depth is folded, like an optional one.
+          folded[#folded + 1] = { source = id, target = target, from_box = item.link.from_box,
+            symbol = item.link.symbol, callsite = item.link.callsite }
         elseif nodes[target] and nodes[target].lazy then
           -- Not explained yet: nothing to show, and nothing to come back from.
           refs[#refs + 1] = { from = id, to = target, why = "lazy" }
@@ -102,7 +110,7 @@ function M.plan(graph)
         if state[item.link.target] then
           refs[#refs + 1] = { from = id, to = item.link.target, why = "shared" }
         else
-          local ok, problem = visit(item.link.target, "enter", item.link)
+          local ok, problem = visit(item.link.target, "enter", item.link, (depth or 0) + (item.link.via == "call" and 1 or 0))
           if not ok then
             return nil, problem
           end
@@ -168,6 +176,13 @@ function M.plan(graph)
       queue[#queue + 1] = link.target
     end
   end
+  -- A call folded by the zoom hands its subtree to the reader as well.
+  for _, fold in ipairs(folded) do
+    if not state[fold.target] and not owned[fold.target] then
+      owned[fold.target] = true
+      queue[#queue + 1] = fold.target
+    end
+  end
   local head = 1
   while head <= #queue do
     local id = queue[head]
@@ -188,7 +203,7 @@ function M.plan(graph)
       end
     end
   end
-  return { steps = steps, refs = refs }
+  return { steps = steps, refs = refs, folded = folded, max_depth = deepest }
 end
 
 -- A cursor over a plan. Walking back up is just stepping backwards: the

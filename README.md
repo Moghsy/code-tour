@@ -159,3 +159,7 @@ With `walk = true` (the default; set `walk = false` for the older route), `aj`/`
 ## Parts tree and route summary
 
 Parts nest: a part may carry its own `parts`, each level covering its parent. `stop.parts` stays the depth-first flat list (so box ids `S.K` and `aj` are unchanged); each part records `_parent_part` and `_depth`, the header shows paths like `Part 2.1 (4/9)` for nested snippets, and graph boxes carry `parent`/`depth`. `show` returns `route = {snippets, boxes, optional, lazy, broken, refs}` so an agent can prune to a requested level of detail while keeping the end-to-end path: `broken` lists gold calls hanging below calls that are not walked.
+
+## Zoom
+
+`<leader>a-` / `<leader>a+` (`:CodeTourZoomOut` / `:CodeTourZoomIn`) fold or unfold the walk by call depth, using only what is already authored; no agent is involved. Gold calls deeper than the zoom depth are folded: they are not walked (they behave like optional ones, still openable with `ad`), they are drawn in a dim colour labelled "folded (a+ to open)", and the header adds "+N folded". Zooming out while standing inside a branch that folds moves the reader to the nearest snippet still on the walk. A new tour starts unfolded; the route summary returned to the agent describes the authored tour regardless of zoom.

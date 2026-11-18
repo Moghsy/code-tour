@@ -31,13 +31,28 @@ assert(rows[current].id == "B" and lines[current]:find("● Helper", 1, true), t
 local has_current = false
 for _, span in ipairs(spans) do has_current = has_current or span[4] == "CodeTourTreeCurrent" end
 assert(has_current)
-for i, row in ipairs(rows) do assert(row == nil or row.id, i) end
+for i = 1, #lines do assert(rows[i] == nil or rows[i].id, i) end
+-- j/k step one box at a time (the title row of each box), with counts
+local anchors = tree.anchors(rows, #lines)
+assert(#anchors == 5, vim.inspect(anchors)) -- Entry, Helper, Entry ref, Side, Second
+for k = 2, #anchors do assert(anchors[k] - anchors[k - 1] >= 4, vim.inspect(anchors)) end
+tree.open("float", graph, "A", function() end)
+assert(vim.api.nvim_win_get_cursor(0)[1] == anchors[1])
+vim.api.nvim_feedkeys("j", "x", false)
+assert(vim.api.nvim_win_get_cursor(0)[1] == anchors[2], vim.api.nvim_win_get_cursor(0)[1])
+vim.api.nvim_feedkeys("2j", "x", false)
+assert(vim.api.nvim_win_get_cursor(0)[1] == anchors[4])
+vim.api.nvim_feedkeys("k", "x", false)
+assert(vim.api.nvim_win_get_cursor(0)[1] == anchors[3])
+vim.api.nvim_feedkeys("9k", "x", false)
+assert(vim.api.nvim_win_get_cursor(0)[1] == anchors[1])
+tree.close()
 -- float, jump, toggle
 local picked
 tree.open("float", graph, "A", function(n) picked = n.id end)
 assert(tree.is_open() and vim.api.nvim_win_get_config(0).relative == "editor")
 local target
-for i, row in ipairs(rows) do if row and row.id == "C" then target = i end end
+for i = 1, #lines do if rows[i] and rows[i].id == "C" then target = i end end
 vim.api.nvim_win_set_cursor(0, { target, 0 })
 vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
 assert(picked == "C" and not tree.is_open(), tostring(picked))

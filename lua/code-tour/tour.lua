@@ -1763,10 +1763,10 @@ M.render = render
 
 function M.setup(opts)
   s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
-    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "auto" }, opts or {})
+    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "herdr" }, opts or {})
   local agent = s.opts.agent
-  assert(agent == "auto" or agent == "herdr" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
-    'code-tour: agent must be "auto", "herdr", "clipboard" or { send = function(text, action, done) end }')
+  assert(agent == "herdr" or agent == "auto" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
+    'code-tour: agent must be "herdr", "auto", "clipboard" or { send = function(text, action, done) end }')
   for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
     local value = s.opts[name]
     assert(type(value) == "number" and value > 0 and value == math.floor(value), name .. " must be a positive integer")

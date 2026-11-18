@@ -98,7 +98,7 @@ All options are passed to `require("code-tour").setup(opts)`:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `agent` | `"auto"` | How the editor sends prompts back to the agent: `"auto"`, `"herdr"`, `"clipboard"` or `{ send = fn }` |
+| `agent` | `"herdr"` | How the editor sends prompts back to the agent: `"herdr"`, `"auto"`, `"clipboard"` or `{ send = fn }` |
 | `keys` | see below | Key mappings; `false` for no mappings |
 | `page_lines` | `18` | Upper page budget for explanation boxes |
 | `smooth_scroll` | `true` | Animate navigation (needs Snacks) |
@@ -111,8 +111,8 @@ All options are passed to `require("code-tour").setup(opts)`:
 
 The agent-to-editor direction (showing a tour, answering, filling) is plain RPC and needs no multiplexer. `agent` only controls the editor-to-agent direction: questions, "explain this" requests and lazy definitions.
 
-- `"auto"` (default): `"herdr"` when the tour was authored under Herdr or `HERDR_SESSION` is set, otherwise `"clipboard"`.
-- `"herdr"`: delivers the prompt to the authoring agent's pane (stay, follow or paste), checks that the conversation is still live, and starts an agent in a new tab when none is connected. Needs the `herdr` binary (`HERDR_BIN_PATH` overrides it).
+- `"herdr"` (default): delivers the prompt to the authoring agent's pane (stay, follow or paste), checks that the conversation is still live, and starts an agent in a new tab when none is connected. Needs the `herdr` binary (`HERDR_BIN_PATH` overrides it).
+- `"auto"`: `"herdr"` when the tour was authored under Herdr or `HERDR_SESSION` is set, otherwise `"clipboard"`.
 - `"clipboard"`: copies the prompt (including the exact reply command) to the `+` and `"` registers and tells you to paste it into your agent. The reply still arrives through the CLI.
 - `{ send = function(text, action, done) ... end }`: your own transport. `action` is `"stay"`, `"follow"` or `"add"`; call `done(true)` or `done(false, "reason")`. For example, with tmux:
 

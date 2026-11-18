@@ -59,7 +59,7 @@ bin/code-tour src/main.lua:10-18
 
 ```lua
 opts = {
-  agent = "auto",   -- "auto" | "herdr" | "clipboard" | { send = function(text, action, done) end }
+  agent = "herdr",  -- "herdr" | "auto" | "clipboard" | { send = function(text, action, done) end }
   keys = {          -- any action; false disables it, `keys = false` disables all
     next = "<leader>aj",
     prev = "<leader>ak",
@@ -69,7 +69,7 @@ opts = {
 }
 ```
 
-`agent` controls how questions and explain requests get back to your agent. Without Herdr, the default copies the prompt to your clipboard to paste into the agent. A custom `send` function can use tmux, a terminal API or anything else. Every key action, the agent backends and the remaining options are in [SPEC.md](SPEC.md#configuration).
+`agent` controls how questions and explain requests get back to your agent. Without Herdr, set `"clipboard"` (or `"auto"`, which falls back to it) to copy the prompt for pasting into the agent. A custom `send` function can use tmux, a terminal API or anything else. Every key action, the agent backends and the remaining options are in [SPEC.md](SPEC.md#configuration).
 
 The commands, tour format and saved tours are also in [SPEC.md](SPEC.md).
 

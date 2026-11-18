@@ -1848,23 +1848,6 @@ function M.setup(opts)
   end, { nargs = "?", complete = "file", force = true })
   vim.api.nvim_create_user_command("CodeTourZoomOut", function() M.zoom(-1) end, { force = true })
   vim.api.nvim_create_user_command("CodeTourZoomIn", function() M.zoom(1) end, { force = true })
-  vim.api.nvim_create_user_command("CodeTourBadgeColors", function(args)
-    local arg = args.args
-    if arg == "" or arg == "next" or arg == "prev" then
-      notify("Badge colours: " .. badge.cycle(arg == "prev" and -1 or 1), vim.log.levels.INFO)
-    elseif badge.select(arg) then
-      notify("Badge colours: " .. arg, vim.log.levels.INFO)
-    else
-      notify("Unknown badge palette: " .. arg)
-    end
-  end, {
-    nargs = "?", force = true,
-    complete = function()
-      local names = { "next", "prev", "theme" }
-      for _, p in ipairs(badge.palettes) do names[#names + 1] = p[1] end
-      return names
-    end,
-  })
   vim.api.nvim_create_user_command("CodeTourGraph", function()
     local ok, result = pcall(M.graph)
     notify(ok and ("Tour graph: " .. result.path) or result, ok and vim.log.levels.INFO or vim.log.levels.WARN)

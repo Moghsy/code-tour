@@ -100,7 +100,7 @@ All options are passed to `require("code-tour").setup(opts)`:
 | --- | --- | --- |
 | `agent` | `"herdr"` | How the editor sends prompts back to the agent: `"herdr"`, `"auto"`, `"clipboard"` or `{ send = fn }` |
 | `keys` | see below | Key mappings; `false` for no mappings |
-| `badge` | `{ padding = 1, rounded = true, palette = "sky / sand" }` | Call badges: padding cells inside each end, rounded end caps (Powerline glyphs, so a Nerd Font; `rounded = false` without one), and the palette for the next and visited badges. `palette` is a name from `require("code-tour.call-badge").palettes` (`cyan / grey`, `orange / green`, `lime / slate`, `pink / teal`, `sky / sand`, `mint / maroon`, `yellow / indigo`, `coral / steel`) or `"theme"` to derive them from the colorscheme. `:CodeTourBadgeColors [next\|prev\|name]` previews palettes without changing your config. |
+| `badge` | `{ padding = 1, rounded = true }` | Call badges: padding cells inside each end, and rounded end caps (Powerline glyphs, so a Nerd Font; `rounded = false` without one). |
 | `page_lines` | `18` | Upper page budget for explanation boxes |
 | `smooth_scroll` | `true` | Animate navigation (needs Snacks) |
 | `saved_batch_size` | `12` | Boxes per regeneration request for a reopened saved tour |

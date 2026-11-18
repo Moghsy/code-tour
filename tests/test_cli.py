@@ -271,7 +271,7 @@ class RPCIntegrationTests(unittest.TestCase):
 # An optional branch still returns to the box it was opened from.
         self.assertEqual(position, [1, 2])
 
-    def test_badge_background_is_red_in_rendered_cells_over_blue_focus(self):
+    def test_badge_fills_text_and_padding_in_rendered_cells_over_blue_focus(self):
         file = self.root / 'badge.lua'
         file.write_text('handlerStack.bubbleEvent(event)\n')
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
@@ -306,10 +306,16 @@ class RPCIntegrationTests(unittest.TestCase):
               vim.cmd("redraw")
               local s=tour.state()
               return vim.fn.screenpos(s.win,1,1)''', [str(file), str(self.root)]])
-            cell = request('nvim__inspect_cell', [1, position['row'] - 1, position['col']])
-            self.assertEqual(cell[0], 'a')
-            self.assertEqual(cell[1]['background'], 0x5c3038)
-            self.assertEqual(cell[1]['foreground'], 0xf0dfe2)
+            colour = request('nvim_exec_lua', ['''local hl=vim.api.nvim_get_hl(0,{name="CodeTourCall",link=false})
+              return {hl.bg, hl.fg}''', []])
+            # The badge is a left cap and one padding cell, the call text, then padding and a cap.
+            padding = request('nvim__inspect_cell', [1, position['row'] - 1, position['col']])
+            text = request('nvim__inspect_cell', [1, position['row'] - 1, position['col'] + 2])
+            self.assertEqual(padding[0], ' ')
+            self.assertEqual(padding[1]['background'], colour[0])
+            self.assertEqual(text[0], 'a')
+            self.assertEqual(text[1]['background'], colour[0])
+            self.assertEqual(text[1]['foreground'], colour[1])
             request('nvim_ui_detach', [])
 
     def test_failed_definition_lookup_round_trip_over_rpc(self):

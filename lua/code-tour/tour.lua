@@ -253,14 +253,6 @@ render = function(jump)
   end
 end
 
-do
-  local draw = render
-  render = function(jump)
-    draw(jump)
-    if s.machine then require("code-tour.machine-view").refresh() end
-  end
-end
-
 local function command(action)
   local cli = s.cli or (vim.fn.stdpath("config") .. "/local-plugins/code-tour.nvim/bin/code-tour")
   return vim.fn.shellescape(cli)
@@ -333,7 +325,6 @@ local function activate(data, opts, root, append, review, base)
     s.arrival = nil
     s.id = vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
     s.stops, s.pending, s.questions, s.frames, s.walk_index, s.zoom = {}, {}, {}, {}, nil, nil
-    s.machine, s.machine_source = nil, nil
     s.stop, s.box = 1, 1
   end
   clear_intent()
@@ -360,16 +351,7 @@ end
 
 function M.show(input, opts)
   opts = opts or {}
-  -- A tour is a list of stops, or { stops = [...], machine = {...} } (SPEC-state-machine.md).
-  local machine_input
-  if type(input) == "table" and not vim.islist(input) and input.stops ~= nil then
-    for key in pairs(input) do
-      assert(key == "stops" or key == "machine", "Unknown tour field: " .. tostring(key))
-    end
-    machine_input, input = input.machine, input.stops
-  end
   local append = opts.append and #s.stops > 0
-  assert(not (append and machine_input ~= nil), "A machine cannot be appended to a tour")
   local root = vim.fs.normalize(opts.root or vim.fn.getcwd())
   if append then
     root = s.root
@@ -380,18 +362,13 @@ function M.show(input, opts)
   end
   local base = opts.base or (append and s.base or nil)
   local data = prepare(input, root, review, base)
-  local machine = machine_input ~= nil and require("code-tour.machine").normalize(machine_input, data) or nil
   -- Snippets marked `pending` are streamed: shown as placeholders on the route, then
   -- filled in by the agent in walk order (see M.fill).
   local result = activate(data, opts, root, append, review, base)
-  if not append then s.machine, s.machine_source = machine, machine and machine_input or nil end
   result.pending = register_pending(data)
   if result.pending then render(false) end
   saved.sync(s)
   result.route = route_summary()
-  if s.machine then
-    require("code-tour.machine-view").refresh()
-  end
   return result
 end
 
@@ -424,7 +401,6 @@ function M.toggle()
   end
 end
 function M.stop()
-  require("code-tour.machine-view").close()
   M.hide()
   composer.clear()
   M.cancel()
@@ -997,39 +973,6 @@ function M.tree(mode)
   end)
 end
 
--- Jump the tour to a stop or part by its authored id (what a machine row points at).
-local function goto_id(id)
-  local hit = require("code-tour.machine").index(s.stops)[id]
-  if not hit then
-    notify("Not in this tour: " .. tostring(id), vim.log.levels.WARN)
-    return false
-  end
-  local i, k = locate(hit.stop, hit.box)
-  if not i then return false end
-  clear_intent()
-  s.stop, s.box, s.frames, s.walk_index = i, k, {}, nil
-  reset_pages()
-  M.recenter()
-  return true
-end
-
--- The tour's state machine as a diagram; <CR> / gd on a row jumps the tour there.
-function M.machine(mode)
-  assert(s.machine, "This tour has no machine")
-  require("code-tour.machine-view").open(mode or s.opts.machine.open, {
-    machine = s.machine,
-    current = function()
-      local _, box = current()
-      return box and box.id or nil
-    end,
-    goto_id = goto_id,
-    ask = function(id)
-      if goto_id(id) then M.ask() end
-    end,
-    ask_key = require("code-tour.keys").lhs("ask"),
-  })
-end
-
 function M.save_saved(opts)
   opts = opts or {}
   library.check_directory(opts.library)
@@ -1058,14 +1001,6 @@ function M.open_saved(id, opts)
   local root = plan.runtime[1].path
   root = vim.fs.dirname(root)
   activate(plan.runtime, opts, root, false, false, nil)
-  if record.machine then
-    local ok, machine = pcall(require("code-tour.machine").normalize, record.machine, s.stops)
-    if ok then
-      s.machine, s.machine_source = machine, record.machine
-    else
-      notify("Saved state machine not restored: " .. tostring(machine), vim.log.levels.WARN)
-    end
-  end
   saved.start(s, plan, {
     command = function(request) return command("fill " .. request) end,
     tour = function() return library.directory() .. "/" .. id .. ".json" end,
@@ -1871,8 +1806,6 @@ end
 function M.setup(opts)
   s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
     saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "herdr", tree = "float" }, opts or {})
-  s.opts.machine = vim.tbl_extend("force", { open = "split" }, s.opts.machine or {})
-  assert(({ float = 1, tab = 1, split = 1 })[s.opts.machine.open], 'code-tour: machine.open must be "float", "tab" or "split"')
   assert(s.opts.tree == "float" or s.opts.tree == "tab", 'code-tour: tree must be "float" or "tab"')
   local agent = s.opts.agent
   assert(agent == "herdr" or agent == "auto" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
@@ -1895,7 +1828,6 @@ function M.setup(opts)
     prev_snippet = function() M.next_snippet(-1) end,
     list = M.list_snippets,
     tree = function() M.tree() end,
-    machine = function() M.machine() end,
     ask = M.ask,
     explain = M.explain,
     explain_context = M.explain_with_context,
@@ -1942,10 +1874,6 @@ function M.setup(opts)
     local ok, err = pcall(M.tree, args.args ~= "" and args.args or nil)
     if not ok then notify(err, vim.log.levels.WARN) end
   end, { nargs = "?", complete = function() return { "float", "tab" } end, force = true })
-  vim.api.nvim_create_user_command("CodeTourMachine", function(args)
-    local ok, err = pcall(M.machine, args.args ~= "" and args.args or nil)
-    if not ok then notify(err, vim.log.levels.WARN) end
-  end, { nargs = "?", complete = function() return { "float", "tab", "split" } end, force = true })
   vim.api.nvim_create_user_command("CodeTourGraph", function()
     local ok, result = pcall(M.graph)
     notify(ok and ("Tour graph: " .. result.path) or result, ok and vim.log.levels.INFO or vim.log.levels.WARN)

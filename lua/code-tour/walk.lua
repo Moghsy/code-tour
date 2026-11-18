@@ -165,19 +165,11 @@ function M.plan(graph, opts)
   -- only by optional calls are the reader's to open, never roots.
   local gold, called = {}, {}
   for _, link in ipairs(graph.links) do
-    if (link.via == "call" or link.via == "sequence" or link.via == "machine") and not link.ref then
+    if (link.via == "call" or link.via == "sequence") and not link.ref then
       called[link.target] = true
       if link.relation == "next" then
         gold[link.target] = true
       end
-    end
-  end
-  -- A machine names its start state: the walk begins there.
-  local start = graph.graph and graph.graph.start
-  if start and nodes[start] and not nodes[start].lazy then
-    local ok, err = visit(start, "root")
-    if not ok then
-      return nil, err
     end
   end
   for _, node in ipairs(graph.nodes) do
@@ -191,7 +183,7 @@ function M.plan(graph, opts)
   -- Everything below an optional call belongs to the reader until they open it.
   local owned, queue = {}, {}
   for _, link in ipairs(graph.links) do
-    if (link.via == "call" or link.via == "machine") and link.relation == "optional" and not state[link.target] and not owned[link.target] then
+    if link.via == "call" and link.relation == "optional" and not state[link.target] and not owned[link.target] then
       owned[link.target] = true
       queue[#queue + 1] = link.target
     end
@@ -208,7 +200,7 @@ function M.plan(graph, opts)
     local id = queue[head]
     head = head + 1
     for _, link in ipairs(graph.links) do
-      if (link.via == "call" or link.via == "machine") and link.source == id and not owned[link.target] and not state[link.target] then
+      if link.via == "call" and link.source == id and not owned[link.target] and not state[link.target] then
         owned[link.target] = true
         queue[#queue + 1] = link.target
       end

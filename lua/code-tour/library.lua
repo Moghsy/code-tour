@@ -140,7 +140,7 @@ local function evidence(v)
   end
 end
 function M.validate(record)
-  fields(record, keys("kind version id title created_at saved_at repositories stops machine"), "record")
+  fields(record, keys("kind version id title created_at saved_at repositories stops"), "record")
   check(record.kind == "code-tour.saved", "Not a saved code tour")
   check(record.version == 1, "Unsupported saved tour version: " .. tostring(record.version))
   check(hex(record.id, 32), "Invalid tour ID")
@@ -149,7 +149,6 @@ function M.validate(record)
     M.timestamp(record.created_at) and M.timestamp(record.saved_at) and record.created_at <= record.saved_at,
     "Invalid UTC save timestamps"
   )
-  check(record.machine == nil or (type(record.machine) == "table" and not vim.islist(record.machine)), "Invalid machine")
   list(record.repositories, "repositories")
   list(record.stops, "stops")
   check(#record.stops > 0 and #record.repositories > 0, "Empty saved tour")
@@ -168,17 +167,13 @@ function M.validate(record)
     check(not repos[repo.id], "Duplicate repository ID")
     repos[repo.id] = repo
   end
-  local function authored_id(v)
-    check(v.tour_id == nil or (type(v.tour_id) == "string" and v.tour_id:match("^[%w][%w._-]*$")), "Invalid authored id")
-  end
   local function identity(v)
-    authored_id(v)
     check(text(v.id) and not ids[v.id], "Missing or duplicate record-local ID")
     ids[v.id] = true
   end
   local stop, box
   box = function(v, depth)
-    fields(v, keys("id tour_id note locator evidence calls"), "box")
+    fields(v, keys("id note locator evidence calls"), "box")
     identity(v)
     check(text(v.note), "Box requires a prepared note")
     locator(v.locator)
@@ -191,7 +186,7 @@ function M.validate(record)
   end
   stop = function(v, depth, nested)
     check(depth <= 128, "Saved tree is too deep")
-    fields(v, keys("id tour_id title repo file overview parts callsite next level"), "stop")
+    fields(v, keys("id title repo file overview parts callsite next level"), "stop")
     identity(v)
     check(text(v.title) and repos[v.repo] and M.relative(v.file), "Invalid stop source/title")
     check(nested or (v.callsite == nil and v.next == nil), "Root cannot have caller navigation")

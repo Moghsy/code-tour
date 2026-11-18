@@ -601,11 +601,7 @@ def main(argv=None):
     data_root = (args.project or Path.cwd()).resolve()
     if data is not None:
         # A fill may also answer {"unresolved": reason}; anything else is a list of stops.
-        # A tour is a list of stops, or {"stops": [...], "machine": {...}}.
-        if isinstance(data, dict) and isinstance(data.get('stops'), list):
-            items = data['stops']
-        else:
-            items = data if isinstance(data, list) else []
+        items = data if isinstance(data, list) else []
         files = resolve_stops(items, data_root)
     else:
         files = []

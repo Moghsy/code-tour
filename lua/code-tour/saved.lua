@@ -222,7 +222,6 @@ function M.export(state, opts)
     end
     local result = {
       id = box._saved_id,
-      tour_id = box.id,
       note = note,
       locator = capture and capture.locator or (old and old.locator),
       evidence = vim.deepcopy(evidence),
@@ -249,7 +248,6 @@ function M.export(state, opts)
     stop._saved_stop_id = stop._saved_stop_id or (old and old.id) or library.id()
     local result = {
       id = stop._saved_stop_id,
-      tour_id = stop.id,
       title = stop.title or "Snippet",
       repo = repo.id,
       file = assert(vim.fs.relpath(repo.root, stop.path)),
@@ -289,7 +287,6 @@ function M.export(state, opts)
     end
   end
   record.stops = merge(record.stops, fresh)
-  record.machine = state.machine_source or nil
   -- Update detached descendants in place without turning them into duplicate roots.
   local function update(items)
     for _, item in ipairs(items) do

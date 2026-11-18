@@ -48,7 +48,6 @@ bin/code-tour src/main.lua:10-18
 | `<leader>an` / `ap` | Next / previous snippet |
 | `<leader>al` | Snippet picker |
 | `<leader>at` | Tour diagram in a float (`tree = "tab"` for a tab) |
-| `<leader>aM` | State machine view (tours that include a `machine`) |
 | `<leader>ad` | Open a skipped call |
 | `<leader>ao` | Return to the caller |
 | `<leader>ar` | Ask about the box or selection |
@@ -73,7 +72,7 @@ opts = {
 
 `agent` controls how questions and explain requests get back to your agent. Without Herdr, set `"clipboard"` (or `"auto"`, which falls back to it) to copy the prompt for pasting into the agent. A custom `send` function can use tmux, a terminal API or anything else. Every key action, the agent backends and the remaining options are in [SPEC.md](SPEC.md#configuration).
 
-The commands, tour format and saved tours are also in [SPEC.md](SPEC.md). State-machine tours are described in [SPEC-state-machine.md](SPEC-state-machine.md).
+The commands, tour format and saved tours are also in [SPEC.md](SPEC.md). A proposed state-machine view is in [SPEC-state-machine.md](SPEC-state-machine.md).
 
 ## Tests
 

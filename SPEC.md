@@ -12,7 +12,7 @@ Navigation centers the focused code plus its virtual rows. When that span cannot
 
 ## Setup and naming
 
-The CLI needs Python 3 and `msgpack` (`python3-msgpack` on Debian/Ubuntu). Add the plugin to runtimepath and call `require("code-tour").setup()`.
+The CLI needs only Python 3; it speaks Neovim's MessagePack-RPC with a small built-in codec, so no packages are required. Add the plugin to runtimepath and call `require("code-tour").setup()`.
 
 The plugin, Lua namespace, CLI and authoring skill are named `code-tour`; editor commands use `CodeTour` (for example, `:CodeTourLoad` and `:CodeTourExpand`). `require("tour")` remains a public entry point. The former `require("code-walkthrough")`, CLI path and installed `scripts/walkthrough.py` paths forward to code-tour so existing reply commands still work. `:CodeTourLoad` reads `.nvim/code-tour.json`, with `.nvim/walkthrough.json` as a fallback for saved tours. The skill installer migrates the active skill directory to `code-tour` and preserves previous files as backups.
 

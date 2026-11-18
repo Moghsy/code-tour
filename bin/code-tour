@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Show code tours and return answers/fills over Neovim's MessagePack RPC socket."""
+"""Show code tours and return answers/fills over Neovim's MessagePack RPC socket (stdlib only)."""
 import argparse
 from datetime import datetime
 import hashlib
@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shlex
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -28,26 +29,144 @@ def herdr(*args, session=None):
     return data.get('result', data)
 
 
+def pack(value):
+    """Encode a value as MessagePack (the subset Neovim's RPC API needs)."""
+    if value is None:
+        return b'\xc0'
+    if value is True:
+        return b'\xc3'
+    if value is False:
+        return b'\xc2'
+    if isinstance(value, int):
+        if 0 <= value < 128:
+            return struct.pack('B', value)
+        if -32 <= value < 0:
+            return struct.pack('b', value)
+        if 0 <= value < 1 << 64:
+            return b'\xcf' + struct.pack('>Q', value)
+        return b'\xd3' + struct.pack('>q', value)
+    if isinstance(value, float):
+        return b'\xcb' + struct.pack('>d', value)
+    if isinstance(value, str):
+        data = value.encode('utf-8')
+        n = len(data)
+        head = (struct.pack('B', 0xa0 | n) if n < 32 else b'\xd9' + struct.pack('B', n) if n < 1 << 8
+                else b'\xda' + struct.pack('>H', n) if n < 1 << 16 else b'\xdb' + struct.pack('>I', n))
+        return head + data
+    if isinstance(value, (bytes, bytearray)):
+        n = len(value)
+        head = (b'\xc4' + struct.pack('B', n) if n < 1 << 8
+                else b'\xc5' + struct.pack('>H', n) if n < 1 << 16 else b'\xc6' + struct.pack('>I', n))
+        return head + bytes(value)
+    if isinstance(value, (list, tuple)):
+        n = len(value)
+        head = (struct.pack('B', 0x90 | n) if n < 16 else b'\xdc' + struct.pack('>H', n) if n < 1 << 16
+                else b'\xdd' + struct.pack('>I', n))
+        return head + b''.join(pack(item) for item in value)
+    if isinstance(value, dict):
+        n = len(value)
+        head = (struct.pack('B', 0x80 | n) if n < 16 else b'\xde' + struct.pack('>H', n) if n < 1 << 16
+                else b'\xdf' + struct.pack('>I', n))
+        return head + b''.join(pack(key) + pack(item) for key, item in value.items())
+    raise TypeError(f'Cannot encode {type(value).__name__} as MessagePack')
+
+
+class Incomplete(Exception):
+    """The buffer ends in the middle of a MessagePack value."""
+
+
+def unpack(buffer, pos=0):
+    """Decode one MessagePack value at pos; return (value, next_pos). Raises Incomplete."""
+    def take(count, at):
+        if at + count > len(buffer):
+            raise Incomplete
+        return buffer[at:at + count], at + count
+
+    def number(fmt, at):
+        data, at = take(struct.calcsize(fmt), at)
+        return struct.unpack(fmt, data)[0], at
+
+    def items(count, at):
+        out = []
+        for _ in range(count):
+            item, at = unpack(buffer, at)
+            out.append(item)
+        return out, at
+
+    def mapping(count, at):
+        out = {}
+        for _ in range(count):
+            key, at = unpack(buffer, at)
+            out[key if not isinstance(key, list) else tuple(key)], at = unpack(buffer, at)
+        return out, at
+
+    def text(count, at):
+        data, at = take(count, at)
+        return data.decode('utf-8', 'replace'), at
+
+    code, pos = number('B', pos)
+    if code < 0x80:
+        return code, pos
+    if code >= 0xe0:
+        return code - 256, pos
+    if 0x80 <= code <= 0x8f:
+        return mapping(code & 0x0f, pos)
+    if 0x90 <= code <= 0x9f:
+        return items(code & 0x0f, pos)
+    if 0xa0 <= code <= 0xbf:
+        return text(code & 0x1f, pos)
+    simple = {0xc0: None, 0xc2: False, 0xc3: True}
+    if code in simple:
+        return simple[code], pos
+    scalars = {0xca: '>f', 0xcb: '>d', 0xcc: 'B', 0xcd: '>H', 0xce: '>I', 0xcf: '>Q',
+               0xd0: 'b', 0xd1: '>h', 0xd2: '>i', 0xd3: '>q'}
+    if code in scalars:
+        return number(scalars[code], pos)
+    lengths = {0xd9: 'B', 0xda: '>H', 0xdb: '>I', 0xc4: 'B', 0xc5: '>H', 0xc6: '>I',
+               0xdc: '>H', 0xdd: '>I', 0xde: '>H', 0xdf: '>I', 0xc7: 'B', 0xc8: '>H', 0xc9: '>I'}
+    if code in lengths:
+        count, pos = number(lengths[code], pos)
+        if code in (0xd9, 0xda, 0xdb):
+            return text(count, pos)
+        if code in (0xc4, 0xc5, 0xc6):
+            return take(count, pos)
+        if code in (0xdc, 0xdd):
+            return items(count, pos)
+        if code in (0xde, 0xdf):
+            return mapping(count, pos)
+        kind, pos = number('b', pos)  # ext with variable length
+        data, pos = take(count, pos)
+        return (kind, data), pos
+    fixed_ext = {0xd4: 1, 0xd5: 2, 0xd6: 4, 0xd7: 8, 0xd8: 16}
+    if code in fixed_ext:
+        kind, pos = number('b', pos)
+        data, pos = take(fixed_ext[code], pos)
+        return (kind, data), pos
+    raise RuntimeError(f'Invalid MessagePack byte 0x{code:02x} in editor reply')
+
+
 def rpc(address, code, args=(), timeout=3):
-    try:
-        import msgpack
-    except ImportError as error:
-        raise RuntimeError('Python msgpack is required (Debian/Ubuntu: python3-msgpack)') from error
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(timeout)
         stream.connect(address)
-        stream.sendall(msgpack.packb([0, 1, 'nvim_exec_lua', [code, list(args)]], use_bin_type=True))
-        unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+        stream.sendall(pack([0, 1, 'nvim_exec_lua', [code, list(args)]]))
+        buffer = b''
         while True:
             chunk = stream.recv(65536)
             if not chunk:
                 raise RuntimeError('Editor disconnected before replying')
-            unpacker.feed(chunk)
-            for response in unpacker:
-                if response[0] == 1 and response[1] == 1:
+            buffer += chunk
+            pos = 0
+            while pos < len(buffer):
+                try:
+                    response, pos = unpack(buffer, pos)
+                except Incomplete:
+                    break
+                if isinstance(response, list) and response[0] == 1 and response[1] == 1:
                     if response[2]:
                         raise RuntimeError(str(response[2]))
                     return response[3]
+            buffer = buffer[pos:]
 
 
 def inspect(address):

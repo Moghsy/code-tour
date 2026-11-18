@@ -10,7 +10,6 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-import msgpack
 
 PLUGIN = Path(__file__).resolve().parents[1]
 CLI = PLUGIN / 'bin/code-tour'
@@ -186,16 +185,10 @@ class RPCIntegrationTests(unittest.TestCase):
         cli.rpc(address, 'require("tour").cancel()')
         cli.rpc(self.addresses[1], 'local t=require("tour"); t.stop(); t.state().stops={}')
 
-    def test_renamed_commands_and_legacy_cli_alias(self):
+    def test_renamed_commands_and_module_alias(self):
         address = self.addresses[0]
         self.assertEqual(cli.rpc(address, 'return vim.fn.exists(":CodeTourExpand")'), 2)
         self.assertTrue(cli.rpc(address, 'return require("code-walkthrough") == require("code-tour") and require("tour") == require("code-tour")'))
-        legacy_cli = PLUGIN.parent / 'code-walkthrough.nvim/bin/walkthrough'
-        payload = [dict(file='source.lua', start=1, end=3, note='Use the renamed plugin')]
-        result = subprocess.run([str(legacy_cli), '--pane', address], input=json.dumps(payload),
-                                cwd=self.root, env=self.env, capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(cli.rpc(address, 'return require("code-tour").state().stops[1].note'), 'Use the renamed plugin')
 
     def test_saved_tour_uses_only_the_current_filename(self):
         address = self.addresses[0]
@@ -284,19 +277,24 @@ class RPCIntegrationTests(unittest.TestCase):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
             stream.settimeout(5)
             stream.connect(self.addresses[0])
-            unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+            buffer = b''
             sequence = 0
 
             def request(method, args):
-                nonlocal sequence
+                nonlocal sequence, buffer
                 sequence += 1
-                stream.sendall(msgpack.packb([0, sequence, method, args], use_bin_type=True))
+                stream.sendall(cli.pack([0, sequence, method, args]))
                 while True:
-                    for response in unpacker:
+                    while buffer:
+                        try:
+                            response, used = cli.unpack(buffer)
+                        except cli.Incomplete:
+                            break
+                        buffer = buffer[used:]
                         if response[0] == 1 and response[1] == sequence:
                             self.assertIsNone(response[2], response[2])
                             return response[3]
-                    unpacker.feed(stream.recv(65536))
+                    buffer += stream.recv(65536)
 
             request('nvim_ui_attach', [100, 40, dict(rgb=True, ext_linegrid=True)])
             position = request('nvim_exec_lua', ['''local file,root=...

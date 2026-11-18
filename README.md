@@ -10,7 +10,7 @@ Interactive code tours in Neovim, written by Claude or Codex. The agent picks th
 ## Requirements
 
 - Neovim 0.11+
-- Python 3 with `msgpack` (`python3-msgpack` on Debian/Ubuntu)
+- Python 3 (standard library only)
 - Claude Code or Codex running in Herdr for the agent side
 - Optional: [snacks.nvim](https://github.com/folke/snacks.nvim) for animated scrolling
 

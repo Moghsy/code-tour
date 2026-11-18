@@ -102,7 +102,6 @@ All options are passed to `require("code-tour").setup(opts)`:
 | `keys` | see below | Key mappings; `false` for no mappings |
 | `page_lines` | `18` | Upper page budget for explanation boxes |
 | `smooth_scroll` | `true` | Animate navigation (needs Snacks) |
-| `walk` | `true` | Graph-driven navigation; `false` counts top-level snippets only |
 | `saved_batch_size` | `12` | Boxes per regeneration request for a reopened saved tour |
 | `saved_batch_chars` | `40000` | Approximate captured-code characters per regeneration batch |
 | `saved_request_timeout_ms` | `300000` | Timeout per regeneration batch |

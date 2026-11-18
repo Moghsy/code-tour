@@ -228,7 +228,7 @@ The saved tests use isolated temporary data/state/cache roots and stub agent del
 
 `:CodeTourGraph` (or `code-tour graph`) writes the active tour as NetworkX node-link JSON, the shape graphify uses, in `$TMPDIR/code-tour-UID/`. Nodes are snippets (identical ranges merge, boxes are attributes with their stale status); links are `next` (reading route), `optional` (red callees) and `overlaps`. Stale-explanation reports are computed from this graph. It is a projection of the tour; the saved tour format is unchanged.
 
-`:CodeTourTree [float|tab]` (`<leader>at`) shows the same graph in the terminal as an outline (`lua/code-tour/tree.lua`): top-level snippets numbered in route order, their calls indented beneath (`▶` gold route, `○` optional, `…` not explained yet, `↺` already shown, so recursion cannot loop), `●` and a highlighted row on the snippet you are in, and the part count and `file:lines` on each row. `<CR>` jumps to the snippet (a call opens like `ad`), `q` or `<Esc>` closes, and pressing the key again toggles it. It reads the graph and never changes the tour.
+`:CodeTourTree [float|tab]` (`<leader>at`) draws the graph in the terminal (`lua/code-tour/tree.lua`): every snippet is a box with its title, `file:lines` and part count. Top-level snippets run down the left, joined by `▼`, and a snippet's calls branch off it as indented boxes (`├─▶` gold route, `┄○` optional). `●` marks the snippet you are in, `…` one not explained yet, and `↺` a snippet already drawn, so recursion cannot loop. `<CR>` on any box jumps to that snippet (a call opens like `ad`), `q` or `<Esc>` closes, and pressing the key again toggles it. It reads the graph and never changes the tour.
 
 ## Graph-driven navigation
 

@@ -47,7 +47,7 @@ bin/code-tour src/main.lua:10-18
 | `<leader>aj` / `ak` | Next / previous explanation |
 | `<leader>an` / `ap` | Next / previous snippet |
 | `<leader>al` | Snippet picker |
-| `<leader>at` | Tour outline in a float (`tree = "tab"` for a tab) |
+| `<leader>at` | Tour diagram in a float (`tree = "tab"` for a tab) |
 | `<leader>ad` | Open a skipped call |
 | `<leader>ao` | Return to the caller |
 | `<leader>ar` | Ask about the box or selection |

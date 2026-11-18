@@ -1,14 +1,74 @@
--- Terminal view of the tour graph: an indented outline of the snippets and the calls
--- between them, in a floating window or a tab of its own. It reads the graph from
+-- Terminal view of the tour graph: a diagram of snippet boxes with their calls branching
+-- off them, in a floating window or a tab of its own. It reads the graph from
 -- graph.lua and never changes the tour; <CR> asks the controller to jump to a snippet.
 local M = {}
 
-local ICON = { next = "▶", optional = "○" }
 local view -- { win, buf, tab? } while open
+local MAX_TITLE = 56
+
+local function width(text)
+  return vim.fn.strdisplaywidth(text)
+end
+
+local function where(node)
+  return ("%s:%d-%d"):format(vim.fn.fnamemodify(node.source_file, ":~:."), node.start, node["end"])
+end
+
+-- A line of a block: text, the node it belongs to (for <CR>), and highlight spans
+-- { byte_from, byte_to, group } relative to the start of the line.
+local function line(text, node, spans)
+  return { text = text, node = node, spans = spans or {} }
+end
+
+local function indent(item, prefix, spans)
+  local shift = #prefix
+  local out = line(prefix .. item.text, item.node, {})
+  for _, span in ipairs(spans or {}) do
+    out.spans[#out.spans + 1] = span
+  end
+  for _, span in ipairs(item.spans) do
+    out.spans[#out.spans + 1] = { span[1] + shift, span[2] < 0 and -1 or span[2] + shift, span[3] }
+  end
+  return out
+end
+
+-- One snippet as a rounded box. The bottom edge gets a tee when branches hang below it.
+local function box(node, title, mark, current, has_children)
+  title = (mark ~= "" and mark .. " " or "") .. title
+  if width(title) > MAX_TITLE then
+    title = vim.fn.strcharpart(title, 0, MAX_TITLE - 1) .. "…"
+  end
+  local parts = 0
+  for _, b in ipairs(node.boxes) do
+    if b.role == "part" then parts = parts + 1 end
+  end
+  local meta = where(node) .. (parts > 0 and ("  ·  %d parts"):format(parts) or "")
+  local inner = math.max(width(title), width(meta), 6) + 2
+  local edge = current and "CodeTourTreeCurrent" or "CodeTourTreeBorder"
+  local function row(text, group)
+    local pad = string.rep(" ", inner - 1 - width(text))
+    local left = "│ "
+    local result = line(left .. text .. pad .. "│", node, { { 0, #left, edge }, { #left + #text + #pad, -1, edge } })
+    result.spans[#result.spans + 1] = { #left, #left + #text, group }
+    return result
+  end
+  local bottom = "╰" .. string.rep("─", inner) .. "╯"
+  if has_children then
+    bottom = "╰─┬" .. string.rep("─", inner - 2) .. "╯"
+  end
+  return {
+    line("╭" .. string.rep("─", inner) .. "╮", node, { { 0, -1, edge } }),
+    row(title, current and "CodeTourTreeCurrent" or "CodeTourTreeTitle"),
+    row(meta, "CodeTourTreeLocation"),
+    line(bottom, node, { { 0, -1, edge } }),
+  }
+end
 
 -- Pure part: graph -> lines, line -> node, highlight spans, line of the current node.
-function M.outline(graph, current)
-  local nodes, calls, called = {}, {}, {}
+-- Top-level snippets run down the left, joined by arrows; each snippet's calls hang
+-- off it as indented boxes (▶ on the gold route, ○ optional).
+function M.layout(graph, current)
+  local nodes, calls = {}, {}
   for _, node in ipairs(graph.nodes) do
     nodes[node.id] = node
   end
@@ -16,62 +76,63 @@ function M.outline(graph, current)
     if link.via == "call" and nodes[link.source] and nodes[link.target] then
       calls[link.source] = calls[link.source] or {}
       table.insert(calls[link.source], link)
-      called[link.target] = true
     end
   end
-  local lines, rows, spans, current_line = {}, {}, {}, nil
   local seen = {}
-  local function add(text, node, spec)
-    lines[#lines + 1] = text
-    rows[#lines] = node
-    local row = #lines - 1
-    for _, span in ipairs(spec or {}) do
-      spans[#spans + 1] = { row, span[1], span[2], span[3] }
-    end
-    if node and node.id == current and not current_line then
-      current_line = #lines
-      spans[#spans + 1] = { row, 0, -1, "CodeTourTreeCurrent" }
-    end
-  end
-  local function where(node)
-    return ("%s:%d-%d"):format(vim.fn.fnamemodify(node.source_file, ":~:."), node.start, node["end"])
-  end
-  local function visit(node, prefix, label, via, last)
-    local ref = seen[node.id]
+  local function block(node, label, via)
+    local reference = seen[node.id]
     seen[node.id] = true
-    local branch = via and (prefix .. (last and "└─" or "├─")) or prefix
-    local mark = node.id == current and "●" or (via and ICON[via.relation] or " ")
-    if node.lazy and not node.pending then mark = "…" end
-    local left = ("%s%s %s"):format(branch, mark, label)
-    local extra = ref and " ↺" or ""
-    local parts = 0
-    for _, box in ipairs(node.boxes) do
-      if box.role == "part" then parts = parts + 1 end
-    end
-    if parts > 0 then extra = extra .. ("  (%d parts)"):format(parts) end
-    local loc = where(node)
-    local text = left .. extra .. "  " .. loc
-    local group = via and (via.relation == "next" and "CodeTourTreeNext" or "CodeTourTreeOptional") or "CodeTourTreeTitle"
-    add(text, node, {
-      { #branch, #branch + #mark, group },
-      { #text - #loc, #text, "CodeTourTreeLocation" },
-    })
-    if ref then return end
-    local children = calls[node.id] or {}
-    local child_prefix = via and (prefix .. (last and "   " or "│  ")) or prefix .. "   "
+    local mark = node.id == current and "●" or ""
+    if node.lazy and not node.pending and mark == "" then mark = "…" end
+    local title = label .. (reference and "  ↺" or "")
+    local children = (not reference) and calls[node.id] or {}
+    local lines = box(node, title, mark, node.id == current, #children > 0)
     for k, link in ipairs(children) do
       local child = nodes[link.target]
-      visit(child, child_prefix, child.label, link, k == #children)
+      local last = k == #children
+      local group = link.relation == "next" and "CodeTourTreeNext" or "CodeTourTreeOptional"
+      local arrow = link.relation == "next" and "─▶ " or "┄○ "
+      local sub = block(child, child.label, link)
+      for i, item in ipairs(sub) do
+        if i == 2 then
+          local lead = "  " .. (last and "└" or "├")
+          lines[#lines + 1] = indent(item, lead .. arrow, { { 2, #lead + #arrow - 1, group } })
+        else
+          lines[#lines + 1] = indent(item, "  " .. ((last and i > 2) and " " or "│") .. "   ", { { 2, 2 + #"│", group } })
+        end
+      end
     end
+    return lines
   end
-  local n = 0
+  local out, n, previous_had_children = {}, 0, false
   for _, node in ipairs(graph.nodes) do
-    if node.root or (node.root == nil and not called[node.id]) then
+    if node.root or (node.root == nil and not (function()
+      for _, link in ipairs(graph.links) do
+        if link.via == "call" and link.target == node.id then return true end
+      end
+    end)()) then
       n = n + 1
-      visit(node, "", ("%d. %s"):format(n, node.label))
+      if n > 1 then
+        if previous_had_children then out[#out + 1] = line("", nil) end
+        out[#out + 1] = line("  │", nil, { { 2, -1, "CodeTourTreeNext" } })
+        out[#out + 1] = line("  ▼", nil, { { 2, -1, "CodeTourTreeNext" } })
+      end
+      local lines = block(node, ("%d. %s"):format(n, node.label))
+      previous_had_children = #(calls[node.id] or {}) > 0
+      for _, item in ipairs(lines) do out[#out + 1] = item end
     end
   end
-  if #lines == 0 then lines[1] = "(empty tour)" end
+  if #out == 0 then out[1] = line("(empty tour)", nil) end
+  local lines, rows, spans, current_line = {}, {}, {}, nil
+  for i, item in ipairs(out) do
+    lines[i], rows[i] = item.text, item.node
+    for _, span in ipairs(item.spans) do
+      spans[#spans + 1] = { i - 1, span[1], span[2], span[3] }
+    end
+    if item.node and item.node.id == current and not current_line and (not out[i - 1] or out[i - 1].node ~= item.node) then
+      current_line = i + 1
+    end
+  end
   return lines, rows, spans, current_line
 end
 
@@ -97,7 +158,7 @@ end
 local function highlights()
   for name, link in pairs({
     CodeTourTreeCurrent = "CursorLine", CodeTourTreeTitle = "Title", CodeTourTreeNext = "DiagnosticWarn",
-    CodeTourTreeOptional = "DiagnosticError", CodeTourTreeLocation = "Comment",
+    CodeTourTreeOptional = "DiagnosticError", CodeTourTreeLocation = "Comment", CodeTourTreeBorder = "FloatBorder",
   }) do
     vim.api.nvim_set_hl(0, name, { default = true, link = link })
   end
@@ -111,7 +172,7 @@ function M.open(mode, graph, current, on_select)
     return
   end
   highlights()
-  local lines, rows, spans, current_line = M.outline(graph, current)
+  local lines, rows, spans, current_line = M.layout(graph, current)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   local ns = vim.api.nvim_create_namespace("code-tour-tree")

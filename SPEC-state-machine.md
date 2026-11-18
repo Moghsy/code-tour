@@ -1,6 +1,6 @@
 # State-machine view
 
-Status: proposal. Nothing here is implemented yet. It extends the tour graph and the tree view in [SPEC.md](SPEC.md) with a second kind of picture: the **state machine of a program**, drawn in the terminal, where every node can be opened, edited and handed to an agent.
+Status: proposal. Nothing here is implemented yet. It adds a **state machine** layer inside the tour JSON (see [SPEC.md](SPEC.md)): states are snippets, steps are parts, transitions are edges. It is drawn in the terminal in sync with the tour, and every node can be opened, asked about and handed to an agent.
 
 ## Where the idea comes from
 
@@ -26,68 +26,99 @@ A reply from ShortcutFoo ("gd on a prompt node was not on our 2026 bingo card") 
 4. **Failure paths are first-class.** Catches, exits, aborts and bounded loops are drawn the same way as the happy path, so you can see where each error leads.
 5. **The editor knows the data flow.** Prompt templates complete only against values produced earlier and warn on values that are not available yet.
 
-## What this plugin should do
+## The idea here: the machine is part of the tour
 
-code-tour already explains code for a human reader and already sends a selected box to the agent (`<leader>ar`, `<leader>ae`). The state-machine view adds the part that is missing: a picture of **control flow with failure paths**, where a node is a step and not a snippet. Two uses:
+A tour already has the pieces of a state machine: top-level snippets with parts, the gold route between them, optional detours, and calls that return to the exact box. What it lacks is **control flow with failure paths**: which transition leaves a state under which condition, what a catch does, where a loop goes back to.
 
-- **Reading.** An agent explaining a workflow, a pipeline, a router or a reducer can attach a machine to the tour. The reader sees the states, the transitions and the loops at once, and presses `gd` to read the code behind any node.
-- **Steering.** The reader selects a node that looks wrong and asks the agent about it or asks for a change, with only that node as context. This is his "prompt Cursor with that individual node".
+So the state machine is not a second tool. It is an extra layer **inside the tour JSON**, written by the agent, that maps onto the snippets the tour already has:
 
-The existing tree view (`:CodeTourTree`) stays the picture of the *tour* (snippets and calls). The machine view is the picture of the *program*.
+| Machine | Tour |
+| --- | --- |
+| a state | a top-level snippet (the overview box explains the state) |
+| a step | a part of that snippet, with its own code range and explanation |
+| a transition, catch or loop | an edge between snippets, drawn in the machine view and followed by `aj` when it is on the happy path |
+| the machine view | a picture of the same tour, in sync with the tour position |
 
-## Data model
+Everything the tour does for snippets then works for machine nodes with no new mechanism: the explanation box above the code, `<leader>ar` / `<leader>ae` to ask about a node, the picker, saved tours, stale detection, and revalidation against your code.
 
-A machine is authored by the agent next to the tour (same JSON file, key `machines`) or loaded alone. It is plain data; the plugin never runs it.
+The JSON is the source of truth. The plugin never parses the program, so any language or framework works, as long as the agent can describe its states.
+
+## Authoring: the `machine` key
+
+An ordinary tour (see `skills/code-tour/SKILL.md`) gains an optional top-level `machine`. Each state names the stop that explains it; each step names a part of that stop. Nothing is repeated: file and line ranges live only on the stops.
 
 ```json
 {
-  "machines": [{
-    "id": "fixer",
+  "stops": [
+    {
+      "id": "fix", "file": "src/sm/jobs/fixer/job.ts", "start": 20, "end": 48, "title": "fix",
+      "note": "Try a fix, check it, then decide whether to commit or retry.",
+      "parts": [
+        {"id": "fix.begin-try", "start": 21, "end": 23, "note": "Mark the item as fixing."},
+        {"id": "fix.fix",       "start": 24, "end": 30, "note": "The agent writes the change from the prompt."},
+        {"id": "fix.check",     "start": 31, "end": 36, "note": "Run the checks and feed the result back."}
+      ]
+    },
+    {"id": "commit", "file": "src/sm/jobs/fixer/job.ts", "start": 50, "end": 58, "note": "Commit the change."}
+  ],
+  "machine": {
     "path": ["machines", "launcher", "work-items", "fixer"],
     "start": "claim",
     "catch": [
-      { "error": "Drained", "to": "drained" },
-      { "error": "ItemFailed", "to": "errored" }
+      {"error": "Drained",    "to": "drained"},
+      {"error": "ItemFailed", "to": "errored"}
     ],
     "on_abort": "released",
     "states": [
       {
-        "id": "claim",
-        "steps": [
-          { "id": "claim-fix", "kind": "computer", "status": "fixing",
-            "source": { "file": "src/sm/jobs/fixer/job.ts", "start": 7, "end": 9 } }
-        ],
-        "next": { "to": "prepare" }
-      },
-      {
         "id": "fix",
         "steps": [
-          { "id": "fix", "kind": "agent", "model": "muse-ember", "effort": "xhigh",
-            "prompt": "src/sm/jobs/fixer/prompts/fix.md", "feedback": false }
+          {"part": "fix.begin-try", "kind": "computer", "status": "fixing"},
+          {"part": "fix.fix",       "kind": "agent", "model": "muse-ember", "effort": "xhigh",
+           "prompt": {"file": "src/sm/jobs/fixer/prompts/fix.md", "start": 1, "end": 40}},
+          {"part": "fix.check",     "kind": "computer", "feedback": true}
         ],
-        "on": { "name": "tried", "outcomes": [
-          { "id": "passed", "to": "commit" },
-          { "id": "refused", "when": [{ "visits": "fix", "below": 10, "to": "fix" }], "otherwise": { "exit": "gave-up" } }
-        ] }
+        "on": {
+          "name": "tried",
+          "outcomes": [
+            {"id": "passed",  "to": "commit", "happy": true},
+            {"id": "refused", "when": [{"visits": "fix", "below": 10, "to": "fix"}], "otherwise": {"exit": "gave-up"}}
+          ]
+        }
       },
-      { "id": "tail", "exit": true, "steps": [{ "id": "end", "end": "fixed" }] }
+      {"id": "commit", "next": "build"},
+      {"id": "gave-up", "exit": true, "end": "out of tries"}
     ]
-  }]
+  }
 }
 ```
 
-- **machine**: `id`, optional `path` (breadcrumb of nested machines), `start`, `catch[]` (error name to target), `on_abort`, `states[]`.
-- **state**: `id`, `steps[]`, then either `next` (an unconditional transition) or `on` (a named decision with `outcomes[]`). `exit: true` marks a terminal state. `only_on_catch` lists errors for states that are reachable only by a catch (his `only on catch RunFailed` block).
-- **step**: `id`, `kind` of `computer` (deterministic code) or `agent` (a model step, with `model`, `effort`, `prompt`). Optional `status` (a status chip like `■ fixing`), `feedback` (the step's result is fed back, shown as `as feedback`) and `end` (a terminal value such as `fixed`). `source` is the code location, as in a tour snippet.
-- **transition**: `to` (a state `id`). It is a *jump* (`exit`) when it leaves the machine or goes to a terminal state, and a *loop* when its target is the same or an earlier state. An outcome may carry `when` guards (`visits`, `below`, `to`) and `otherwise`; a guarded outcome is how bounded retries are shown (`fix visits < 10 ↻ fix`, `otherwise ⇥ gave-up`).
-- All names must resolve. A transition to an unknown state, a duplicate id or a step without a `source` or `prompt` is a load error that names the entry, in line with the strict schema the tour already uses.
-- A machine can be **derived** with no authoring: the tour graph projected as a machine (snippets are states, gold calls are `next`, optional calls are outcomes). That gives every tour a state-machine view for free, with fewer details.
+Rules:
+
+- **Identity.** A new optional `id` on stops and parts (unique in the tour, `[a-z0-9._-]`). A state's `id` is the id of its stop; a step's `part` is the id of a part of that stop. A state with no stop (a terminal such as `released`, or a pure router) is allowed; it just has no code box.
+- **State:** `id`, `steps[]` (optional), then at most one of `next` (an unconditional transition) or `on` (a named decision with `outcomes[]`), or `exit: true` with an optional `end` value.
+- **Step:** `part` (required for anything with code), `kind` of `computer` or `agent`, and for `agent` the `model`, `effort` and an optional `prompt` (a file range; it becomes a part of the state's stop so it can be explained and asked about like any other code). Optional `status` (the status chip) and `feedback` (the result goes to the next agent step).
+- **Outcome / transition:** `to` (a state id) or `exit` (leave the machine), `happy: true` for the route `aj` follows, and optional `when` guards (`visits`, `below`, `to`) with an `otherwise`. A transition to the same or an earlier state is a loop, and the view draws it that way.
+- **Machine:** `path` (breadcrumb), `start`, `catch[]` (error name to state), `on_abort`, and the optional `only_on_catch` list on states reachable only by a catch.
+- **Strict loading**, like the rest of the tour. Unknown state or part ids, a duplicate id, a transition to nowhere, two `happy` outcomes in one state, or a step whose part is not in its state's stop are load errors that name the entry. Nothing is guessed or defaulted.
+- **A tour without `machine` behaves exactly as today.** Nothing changes for existing tours or saved tours.
+
+## How it connects to walking the tour
+
+`aj` / `ak` keep their meaning: they follow the tour's route. The machine only adds edges to that route.
+
+- The walk reads a state as a snippet: overview, then each step as a part, in order. Then it follows the state's `happy` transition (or `next`) to the target state's snippet. This is the existing gold-route rule, with the transition as the edge.
+- Every other transition (failed guards, catches, aborts, loops) is **optional**, like a red call: the reader chooses it, the walk steps over it, and the existing "return to the exact box" behaviour applies. The reader follows one with `<leader>ad` on the box (the existing inspect key), which offers a picker when a state has several.
+- A loop back to a state that is already on the path, or already walked, is drawn and listed but **not walked**: this is the existing reference rule in `walk.lua`, so the walk cannot cycle.
+- A catch or `on_abort` applies to the whole machine, so it hangs off the machine header and every step, not one box. It is reachable from the header line in the machine view and from the picker.
+- A state with no stop has no box; the walk passes through it silently and the machine view shows it dimmed.
+- Levels and zoom (`a-`, `a+`) are unchanged. A state's optional branches fold like optional calls, and the happy path stays level 0.
+
+In the tour graph (`graph.lua`) the machine adds links with `relation` `"transition"` (happy, walked), `"branch"` (optional), `"catch"` and `"loop"`, and each carries `from_box`, a label and, for guards, the guard text. Stale-explanation reports and the picker already read this graph.
 
 ## The view
 
-`:CodeTourMachine [float|tab|split]` (default key `<leader>aM`, key action `machine`). It is a read-only buffer, drawn as text, following the colour scheme, and uses the same window options as the tree view.
-
-Layout, top to bottom, as in the thread:
+`:CodeTourMachine [float|tab|split]` (key action `machine`, default `<leader>aM`) shows the machine as text, following the colour scheme, in the same window kinds as the tree view. `split` is the best fit here: it stays open beside the code.
 
 ```
 machines › launcher › work-items › fixer
@@ -99,16 +130,9 @@ on abort          ⇥ released
   claim-fix       computer  ■ fixing
   → prepare
 
-search
-  find-duplicate  muse-ember XHIGH
-  catch RunFailed ⇥ unsearched
-  on found
-  ├ duplicate → duplicate
-  └ none      → fix
-
 fix
   begin-try       computer  ■ fixing
-  fix             muse-ember XHIGH
+  ● fix           muse-ember XHIGH          ← you are here
   check           computer  as feedback
   on tried
   ├ passed → commit
@@ -117,63 +141,54 @@ fix
     └ otherwise ⇥ gave-up
 ```
 
-Glyphs and colours (taken from the screenshots; each is a theme link, so they follow the colour scheme):
+Glyphs and colours, from the screenshots (each is a theme link):
 
 | Mark | Meaning |
 | --- | --- |
-| `▶` and `· start` | The start state. |
-| `→ name` | A normal transition (goto). |
-| `⇥ name` | A jump out: a catch, an abort or an exit. Drawn in the error colour. |
-| `↻ name` | A loop back to an earlier state, with its guard (`visits < 10`). |
+| `▶`, `· start` | The start state. |
+| `→ name` | A normal transition; the `happy` one is the route `aj` follows (gold, as in the tour). |
+| `⇥ name` | A jump out: catch, abort or exit. Error colour. |
+| `↻ name` | A loop back, with its guard. |
 | `· exit` | A state that ends the machine. |
-| `■ name` | A status chip: the item's status while the step runs. |
-| `as feedback` | The step's result is fed back to the next agent step. |
-| agent step name | Drawn in the accent (blue) colour, with its model and effort in the dim colour. Computer steps use the normal colour. |
+| `■ name` | The status chip. |
+| `as feedback` | The step's result is fed back. |
+| agent step | Accent colour, with model and effort dimmed. Computer steps use the normal colour. |
 | `only on catch X` | A dashed gold bar in the margin around a state reachable only by a catch. |
-| margin brackets `╭ │ ╰▸` | A loop or jump span. The bracket runs from the source of a back edge to its target state header, so you can see which states a loop covers. The bracket for the transition under the cursor is highlighted, and the short ones nest inside the long ones. |
+| margin brackets `╭ │ ╰▸` | A loop or jump span: from the source of a back edge down to its target state header. The bracket for the transition under the cursor is highlighted; short ones nest inside long ones. |
+| `●` | The step the tour is on. |
 
-Rules:
+Rules: states in authored order, steps in authored order, one executor column per machine, brackets drawn only in the left margin. A state that was not explained yet (`lazy`) shows `…`, a stale one shows its stale marker.
 
-- States are drawn in `states[]` order, separated by a blank line. Steps keep their authored order.
-- Names align in a column; the executor column is at a fixed width per machine.
-- Back-edge brackets are computed from state order, so they are stable. They use at most one column per nesting level and are drawn in the left margin, never over text.
-- Wrapping is off. A long state list scrolls; `{` and `}` jump to the previous and next state.
-- A machine can contain nested machines (`path`). A step of kind `machine` shows the child's id and `gd` opens that machine in the same window; `<BS>` returns to the parent, and the breadcrumb is the first line.
+### Sync with the tour
 
-### Navigation
-
-- `j` / `k` move one **item** at a time (a step, a transition, a catch or a state header), skipping blank lines and margin-only rows, as in the tree view. A count moves that many items.
-- `gd` on a step opens its code (`source`) or its prompt (`prompt`) in a split beside the machine and puts the cursor on the matching line. On a transition it moves the cursor to the target state. On a catch line it goes to the handler state.
-- `<CR>` on a transition is the same as `gd`. `<C-o>` goes back.
-- `R` refreshes the machine from the file; `q` or `<Esc>` closes.
+- The machine view always shows the tour's current box: `●` marks the step, and the view scrolls to keep it visible. Moving in the tour (`aj`, `ak`, the picker, `ao`) moves the marker; the view never moves the tour on its own.
+- `<CR>` or `gd` on a state, step or transition jumps the tour there and shows its box above the code, exactly as the picker does (`list_snippets`). On a step with a `prompt`, it opens that prompt's box. On a transition it jumps to the target state (or, for an optional one, enters it like `ad`, with the caller to return to).
+- `j` / `k` move one **item** at a time (a header line, a step, a transition, a catch), skipping blank lines and margin-only rows, as in the tree view. A count moves that many.
+- `{` / `}` move to the previous and next state; `q` / `<Esc>` close; `R` redraws from the tour.
 
 ## Talking to the agent about a node
 
-His flow: select a node, open a small prompt, send. In code-tour this reuses the existing agent channel (`agent = "herdr" | "clipboard" | custom`), so nothing here depends on Cursor.
+His flow is "select a node, prompt the agent with just that node". In code-tour that is the existing question flow, now aimed at a machine node:
 
-- `<leader>ar` (or `C`) on a node opens a composer titled `[fixer › write-up]` with the node's lines above and an empty input below, with the hint line `<CR> send · q close` built from the key map.
-- The prompt sent to the agent is small and exact: the machine and state names, the node's text, its `source` or `prompt` path with line range, the incoming and outgoing transitions, and the user's text. It never includes the whole machine unless the user asks (`<leader>aE`, the existing "with extra context" action).
-- The reply lands as a normal explanation box on the node's `source` snippet (when it has one), so the tour keeps the answer; otherwise it is shown in the composer's history.
-- `Ctrl-h` lists earlier questions for the node; `C` starts a new thread. This mirrors the footers in the screenshots (`R=refresh · C=new chat · Ctrl-h=history`).
+- `<leader>ar` in the machine view, on a step, opens the normal composer for that step's box, titled `[fixer › fix]`. The existing request goes out through the configured agent (`herdr`, `clipboard` or a custom function); nothing depends on a particular editor or tool.
+- The request is small and exact (the existing contract): the state and step names, the box's note and its code range, plus the transitions into and out of the state, and the user's text. It does not resend the whole machine unless `<leader>aE` (explain with extra context) is used.
+- On a transition line the question is about the edge: "why does this go to `gave-up` and not `fix`?", with the guard text in the request.
+- The reply is a normal Q&A thread on the box, so the tour keeps it, and it appears in the text view (`<leader>af`).
 
-## Prompt helpers (stretch goal, separate phase)
+## Prompt data flow (separate phase)
 
-What the thread shows for prompt files is an editor feature: typing `{{value.` completes only values produced by earlier steps, and `{{value.fix}}` read too early shows an error. For code-tour:
+The thread's last two images are about editing prompt files: completion offers only values produced by earlier steps, and reading a value too early gives an error. This is an editor feature on top of the machine data, and it stays a later phase:
 
-- The machine file lists, per step, the `value` names it **produces**, and the prompt's `{{value.x}}` fields are what it **reads**.
-- A diagnostic source (via `vim.diagnostic`) marks a read that no earlier step on any path produces. The message names the step: `value.fix is not given to find-duplicate`.
-- A completion source offers the values available at that step.
-- The data-flow check also runs on load and reports every violation in one list, so the agent that authored the machine can be told to fix them.
-
-This only makes sense where a prompt file is edited in Neovim, so it ships separately and is not required for the view.
+- A step may list `produces: ["recall.cause", ...]`, and a prompt part `reads` its `{{value.x}}` fields (or the plugin scans the prompt range for them).
+- A `vim.diagnostic` source reports a read that no earlier step on any path produces: `value.fix is not given to find-duplicate`. A completion source offers what is available at that step.
+- Load also checks it and lists every violation, so the agent that wrote the machine can be told to fix it.
 
 ## Configuration
 
 ```lua
 opts = {
   machine = {
-    open = "float",   -- "float" | "tab" | "split"
-    code = "split",   -- where gd opens code and prompts: "split" | "vsplit" | "float"
+    open = "split",   -- "float" | "tab" | "split"
   },
   keys = { machine = "<leader>aM" },   -- false to disable
 }
@@ -181,26 +196,28 @@ opts = {
 
 ## Parts to build
 
-1. **Model:** `lua/code-tour/machine.lua`: schema validation, the derived machine from a tour graph, back-edge and nesting computation. Pure Lua, no windows.
-2. **Layout:** `lua/code-tour/machine-view.lua`: draws the lines, glyphs and margin brackets, and returns item anchors for `j` / `k`. Follows the same pattern as `tree.lua` (pure layout, then a window).
-3. **Window and keys:** open modes, `gd`, `<CR>`, `{` / `}`, `R`, breadcrumb navigation.
-4. **Agent channel:** the node composer and the scoped prompt, through `conversation.deliver`.
-5. **Skill:** `skills/code-tour/SKILL.md` documents the `machines` key so authoring agents know when to attach one.
-6. **Prompt helpers:** the data-flow check, diagnostics and completion (phase 2).
+1. **Schema:** `lua/code-tour/machine.lua` validates `machine` against the stops (ids, parts, transitions, `happy`), and normalises it. Pure Lua. `stops.lua` gains optional `id` on stops and parts.
+2. **Graph and walk:** `graph.lua` emits the machine edges, `walk.lua` follows `happy`/`next` transitions and treats the rest as optional, with the existing reference rule for loops.
+3. **Layout:** `lua/code-tour/machine-view.lua` draws the text, glyphs, margin brackets and the item anchors for `j` / `k`, as a pure function in the same style as `tree.lua`.
+4. **Window and keys:** open modes, `<CR>` / `gd`, `{` / `}`, `R`, syncing the `●` marker with the tour position.
+5. **Questions:** `<leader>ar` on machine nodes and transitions, with the scoped request.
+6. **Skill and saved tours:** `skills/code-tour/SKILL.md` documents `machine` and says when to attach one. The saved-tour schema keeps the `machine` key and revalidates it with the stops.
+7. **Prompt data flow:** phase 2.
 
 ## Tests
 
-- Schema: a valid machine loads; unknown state, duplicate id, a missing `source` or `prompt`, and a bad guard each fail with the entry named.
-- Layout: the demo machine above renders exact text for the header, the start state, an `on` block and a bounded loop; glyphs match the table; the same input renders the same text.
-- Brackets: a back edge draws a bracket that spans the right states; nested loops nest; the bracket under the cursor is highlighted.
-- Navigation: `j` / `k` land on items only, counts work, `gd` on a step opens the right file and line, `gd` on a transition moves to the target, `<C-o>` returns.
-- Derived machine: a tour with gold calls and an optional call projects to states, `next` and outcomes with no authored machine.
-- Agent: the node prompt contains the node text, its source range and its transitions, and not the rest of the machine; the clipboard backend receives it.
-- Headless only: no live model, no network.
+- **Schema:** a valid machine loads; each of unknown state, unknown part, duplicate id, a transition to nowhere, two `happy` outcomes, and a step whose part is not in its stop fails and names the entry. A tour without `machine` loads and behaves as before.
+- **Graph:** transitions, branches, catches and loops become links with the right `relation`, `from_box` and label.
+- **Walk:** `aj` goes overview → steps → the happy target; optional branches are skipped and enterable with `ad`, and return to the exact box; a loop to a visited state is shown but never walked, so a cyclic machine terminates.
+- **Layout:** the demo machine renders exact text for the header, the start state, an `on` block and a bounded loop; glyphs match the table; the same input renders the same text; brackets span the right states and nest.
+- **Navigation and sync:** `j` / `k` land on items only; `●` follows the tour; `<CR>` on a step shows that step's box; `<CR>` on a transition enters the target.
+- **Ask:** the scoped request has the node, its range and its transitions and not the rest of the machine.
+- **Saved tours:** the machine survives save and open, and a changed range marks the affected node stale.
+- Headless only: no live model and no network.
 
 ## Open questions
 
-1. **What is the source of truth?** This spec has the agent *author* a machine (the data is describing the program). Prime's program *is* the machine, so his picture is generated from running code. Reading real code (for example a TypeScript table like `fixer: [...]` with `on(...)`, `when(...)`, `end(...)`) would need one parser per framework. Proposal: start with the authored JSON, and add an importer only for frameworks you actually use.
-2. **Is the derived machine enough for tours that are not state machines?** If most tours are plain call trees, the tree view already covers them and the derived machine adds little. It is cheap to keep, but optional.
-3. **Prompt helpers.** The data-flow check needs `produces` in the data. Do you want it, or should the view stay a picture and a jump-to-code tool?
-4. **Images.** The thread's screenshots are not stored in this repo. They belong to their author; keep them out of the repository and refer to the thread.
+1. **Machines that are not state-shaped.** The model is built for state-machine-style pipelines. A plain call tree already has the tree view, so it will not get a machine unless the agent writes one.
+2. **One machine or many.** The spec has one `machine` per tour. A program with several machines can use several tours or, later, a list. Say if you want a list now.
+3. **Prompt data flow.** The data-flow check is a separate phase. Do you want it?
+4. **Images.** The thread's screenshots stay out of this repository; they belong to their author. Refer to the thread.

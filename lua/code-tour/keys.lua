@@ -9,6 +9,7 @@ M.defaults = {
   next_snippet = "<leader>an",
   prev_snippet = "<leader>ap",
   list = "<leader>al",
+  tree = "<leader>at",
   ask = "<leader>ar",
   explain = "<leader>ae",
   explain_context = "<leader>aE",

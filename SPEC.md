@@ -101,6 +101,7 @@ All options are passed to `require("code-tour").setup(opts)`:
 | `agent` | `"herdr"` | How the editor sends prompts back to the agent: `"herdr"`, `"auto"`, `"clipboard"` or `{ send = fn }` |
 | `keys` | see below | Key mappings; `false` for no mappings |
 | `badge` | `{ padding = 0, rounded = true }` | Call badges: padding cells inside each end, and rounded end caps (Powerline glyphs, so a Nerd Font; `rounded = false` without one). |
+| `tree` | `"float"` | Where `:CodeTourTree` and `<leader>at` show the tour outline: `"float"` (floating window) or `"tab"` (a tab of its own). `:CodeTourTree float\|tab` overrides it once. |
 | `page_lines` | `18` | Upper page budget for explanation boxes |
 | `smooth_scroll` | `true` | Animate navigation (needs Snacks) |
 | `saved_batch_size` | `12` | Boxes per regeneration request for a reopened saved tour |
@@ -142,6 +143,7 @@ agent = {
 | `ask`* | `<leader>ar` | `zoom_in` | `<leader>a+` |
 | `explain`* | `<leader>ae` | `page_next` | `<leader>a]` |
 | `explain_context`* | `<leader>aE` | `page_prev` | `<leader>a[` |
+| `tree` | `<leader>at` | | |
 
 ```lua
 opts = { keys = { next = "<C-j>", prev = "<C-k>", stop = "<leader>tq", zoom_in = false } }
@@ -206,6 +208,7 @@ nvim --clean --headless -l tests/lookup.lua
 nvim --clean --headless -l tests/diff.lua
 nvim --clean --headless -l tests/saved_batch.lua
 nvim --clean --headless -l tests/branches.lua
+nvim --clean --headless -l tests/tree.lua
 nvim --clean --headless -l tests/calls.lua
 nvim --clean --headless -l tests/next.lua
 nvim --clean --headless -l tests/outputs.lua
@@ -224,6 +227,8 @@ The saved tests use isolated temporary data/state/cache roots and stub agent del
 ## Tour graph
 
 `:CodeTourGraph` (or `code-tour graph`) writes the active tour as NetworkX node-link JSON, the shape graphify uses, in `$TMPDIR/code-tour-UID/`. Nodes are snippets (identical ranges merge, boxes are attributes with their stale status); links are `next` (reading route), `optional` (red callees) and `overlaps`. Stale-explanation reports are computed from this graph. It is a projection of the tour; the saved tour format is unchanged.
+
+`:CodeTourTree [float|tab]` (`<leader>at`) shows the same graph in the terminal as an outline (`lua/code-tour/tree.lua`): top-level snippets numbered in route order, their calls indented beneath (`▶` gold route, `○` optional, `…` not explained yet, `↺` already shown, so recursion cannot loop), `●` and a highlighted row on the snippet you are in, and the part count and `file:lines` on each row. `<CR>` jumps to the snippet (a call opens like `ad`), `q` or `<Esc>` closes, and pressing the key again toggles it. It reads the graph and never changes the tour.
 
 ## Graph-driven navigation
 

@@ -953,6 +953,26 @@ function M.graph()
   return { path = path, nodes = #graph.nodes, links = #graph.links }
 end
 
+-- The tour as an outline in a floating window or a tab; <CR> jumps to the snippet.
+function M.tree(mode)
+  assert(#s.stops > 0, "Open a tour first")
+  local stop = s.stops[s.stop]
+  local current = stop and stop.path and require("code-tour.graph").key(stop) or nil
+  require("code-tour.tree").open(mode or s.opts.tree, build_graph(), current, function(node)
+    local i = node.stops[1]
+    local item = s.stops[i]
+    if not item then return end
+    clear_intent()
+    if item._parent_stop then
+      M.expand_call(item)
+    else
+      s.stop, s.box, s.frames = i, stops.first_box(item), {}
+      reset_pages()
+      M.recenter()
+    end
+  end)
+end
+
 function M.save_saved(opts)
   opts = opts or {}
   library.check_directory(opts.library)
@@ -1785,7 +1805,8 @@ end
 
 function M.setup(opts)
   s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
-    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "herdr" }, opts or {})
+    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "herdr", tree = "float" }, opts or {})
+  assert(s.opts.tree == "float" or s.opts.tree == "tab", 'code-tour: tree must be "float" or "tab"')
   local agent = s.opts.agent
   assert(agent == "herdr" or agent == "auto" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
     'code-tour: agent must be "herdr", "auto", "clipboard" or { send = function(text, action, done) end }')
@@ -1806,6 +1827,7 @@ function M.setup(opts)
     next_snippet = function() M.next_snippet(1) end,
     prev_snippet = function() M.next_snippet(-1) end,
     list = M.list_snippets,
+    tree = function() M.tree() end,
     ask = M.ask,
     explain = M.explain,
     explain_context = M.explain_with_context,
@@ -1848,6 +1870,10 @@ function M.setup(opts)
   end, { nargs = "?", complete = "file", force = true })
   vim.api.nvim_create_user_command("CodeTourZoomOut", function() M.zoom(-1) end, { force = true })
   vim.api.nvim_create_user_command("CodeTourZoomIn", function() M.zoom(1) end, { force = true })
+  vim.api.nvim_create_user_command("CodeTourTree", function(args)
+    local ok, err = pcall(M.tree, args.args ~= "" and args.args or nil)
+    if not ok then notify(err, vim.log.levels.WARN) end
+  end, { nargs = "?", complete = function() return { "float", "tab" } end, force = true })
   vim.api.nvim_create_user_command("CodeTourGraph", function()
     local ok, result = pcall(M.graph)
     notify(ok and ("Tour graph: " .. result.path) or result, ok and vim.log.levels.INFO or vim.log.levels.WARN)

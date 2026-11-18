@@ -9,6 +9,8 @@ local function key(stop)
   return ("%s:%d-%d"):format(stop.path, stop.start, stop["end"])
 end
 
+M.key = key
+
 -- id_of(stop, box) -> "S.K" request box ID.
 function M.build(state, id_of, tour)
   local nodes, by_key, stop_node = {}, {}, {}
@@ -34,6 +36,7 @@ function M.build(state, id_of, tour)
         nodes[#nodes + 1] = node
       end
       node.lazy = node.lazy and stop.lazy or false
+      node.root = node.root or not stop._parent_stop
       node.pending = node.pending and stop.stream == true
       node.stops[#node.stops + 1] = i
       stop_node[stop] = node

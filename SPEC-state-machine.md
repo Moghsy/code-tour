@@ -163,7 +163,7 @@ Rules: states in authored order, steps in authored order, one executor column pe
 
 - The machine view always shows the tour's current box: `●` marks the step, and the view scrolls to keep it visible. Moving in the tour (`aj`, `ak`, the picker, `ao`) moves the marker; the view never moves the tour on its own.
 - `<CR>` or `gd` on a state, step or transition jumps the tour there and shows its box above the code, exactly as the picker does (`list_snippets`). On a step with a `prompt`, it opens that prompt's box. On a transition it jumps to the target state (or, for an optional one, enters it like `ad`, with the caller to return to).
-- `j` / `k` move one **item** at a time (a header line, a step, a transition, a catch), skipping blank lines and margin-only rows, as in the tree view. A count moves that many.
+- `j` / `k` move by line, as in any buffer.
 - `{` / `}` move to the previous and next state; `q` / `<Esc>` close; `R` redraws from the tour.
 
 ## Talking to the agent about a node
@@ -198,7 +198,7 @@ opts = {
 
 1. **Schema:** `lua/code-tour/machine.lua` validates `machine` against the stops (ids, parts, transitions, `happy`), and normalises it. Pure Lua. `stops.lua` gains optional `id` on stops and parts.
 2. **Graph and walk:** `graph.lua` emits the machine edges, `walk.lua` follows `happy`/`next` transitions and treats the rest as optional, with the existing reference rule for loops.
-3. **Layout:** `lua/code-tour/machine-view.lua` draws the text, glyphs, margin brackets and the item anchors for `j` / `k`, as a pure function in the same style as `tree.lua`.
+3. **Layout:** `lua/code-tour/machine-view.lua` draws the text, glyphs, margin brackets and the lines, as a pure function in the same style as `tree.lua`.
 4. **Window and keys:** open modes, `<CR>` / `gd`, `{` / `}`, `R`, syncing the `●` marker with the tour position.
 5. **Questions:** `<leader>ar` on machine nodes and transitions, with the scoped request.
 6. **Skill and saved tours:** `skills/code-tour/SKILL.md` documents `machine` and says when to attach one. The saved-tour schema keeps the `machine` key and revalidates it with the stops.
@@ -210,7 +210,7 @@ opts = {
 - **Graph:** transitions, branches, catches and loops become links with the right `relation`, `from_box` and label.
 - **Walk:** `aj` goes overview → steps → the happy target; optional branches are skipped and enterable with `ad`, and return to the exact box; a loop to a visited state is shown but never walked, so a cyclic machine terminates.
 - **Layout:** the demo machine renders exact text for the header, the start state, an `on` block and a bounded loop; glyphs match the table; the same input renders the same text; brackets span the right states and nest.
-- **Navigation and sync:** `j` / `k` land on items only; `●` follows the tour; `<CR>` on a step shows that step's box; `<CR>` on a transition enters the target.
+- **Navigation and sync:** `●` follows the tour; `<CR>` on a step shows that step's box; `<CR>` on a transition enters the target.
 - **Ask:** the scoped request has the node, its range and its transitions and not the rest of the machine.
 - **Saved tours:** the machine survives save and open, and a changed range marks the affected node stale.
 - Headless only: no live model and no network.

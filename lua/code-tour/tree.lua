@@ -136,16 +136,6 @@ function M.layout(graph, current)
   return lines, rows, spans, current_line
 end
 
--- The title row of every box, in order: where j/k may land.
-function M.anchors(rows, count)
-  local out = {}
-  for i = 1, count do
-    local node = rows[i]
-    if node and rows[i - 1] ~= node then out[#out + 1] = i + 1 end
-  end
-  return out
-end
-
 local function valid(win)
   return win and vim.api.nvim_win_is_valid(win)
 end
@@ -214,9 +204,7 @@ function M.open(mode, graph, current, on_select)
     view = { win = win, buf = buf }
   end
   vim.wo[win].wrap, vim.wo[win].cursorline, vim.wo[win].number = false, true, false
-  -- j/k move by whole boxes: the cursor sits on each box's title row, and the box it is on
-  -- is shaded. Connector lines between boxes are skipped.
-  local anchors = M.anchors(rows, #lines)
+  -- The box under the cursor is shaded.
   local mark = vim.api.nvim_create_namespace("code-tour-tree-box")
   local function shade()
     vim.api.nvim_buf_clear_namespace(buf, mark, 0, -1)
@@ -227,25 +215,8 @@ function M.open(mode, graph, current, on_select)
       end
     end
   end
-  local function step(direction)
-    local here, target = vim.api.nvim_win_get_cursor(win)[1], nil
-    for _ = 1, vim.v.count1 do
-      target = nil
-      if direction > 0 then
-        for _, line in ipairs(anchors) do if line > here then target = line break end end
-      else
-        for k = #anchors, 1, -1 do if anchors[k] < here then target = anchors[k] break end end
-      end
-      if not target then break end
-      here = target
-    end
-    if here ~= vim.api.nvim_win_get_cursor(win)[1] then vim.api.nvim_win_set_cursor(win, { here, 0 }) end
-  end
-  for _, key in ipairs({ "j", "<Down>", "<C-n>" }) do vim.keymap.set("n", key, function() step(1) end, { buffer = buf, nowait = true }) end
-  for _, key in ipairs({ "k", "<Up>", "<C-p>" }) do vim.keymap.set("n", key, function() step(-1) end, { buffer = buf, nowait = true }) end
   vim.api.nvim_create_autocmd("CursorMoved", { buffer = buf, callback = shade })
-  local first = anchors[1] or 1
-  vim.api.nvim_win_set_cursor(win, { current_line or first, 0 })
+  vim.api.nvim_win_set_cursor(win, { current_line or 1, 0 })
   shade()
   vim.keymap.set("n", "<CR>", function()
     local node = rows[vim.api.nvim_win_get_cursor(win)[1]]

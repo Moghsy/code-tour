@@ -40,7 +40,7 @@ local function copy_text(enter)
   else
     copy_view = { win = vim.api.nvim_open_win(buf, enter, config), buf = buf, source = layout.source }
     vim.wo[copy_view.win].conceallevel = 2
-    for _, key in ipairs({ "q", "<Esc>", "<leader>af" }) do
+    for _, key in ipairs({ "q", "<Esc>", require("code-tour.keys").lhs("text_view") }) do
       vim.keymap.set("n", key, M.focus, { buffer = buf })
     end
   end
@@ -107,24 +107,40 @@ local function frame(rows, lines, title, width, indent, footer)
 end
 
 local function footer_hint(width, branch, nested)
+  local keys = require("code-tour.keys")
+  -- Each entry is "{action} text" or "{a/b} text"; entries whose keys are unmapped drop out.
+  local function build(entries)
+    local parts = {}
+    for _, entry in ipairs(entries) do
+      local spec, text = entry[1], entry[2]
+      local first, second = spec:match("^(.-)/(.+)$")
+      local label = second and keys.pair(first, second) or keys.label(spec)
+      if label then parts[#parts + 1] = label .. " " .. text end
+    end
+    return table.concat(parts, " · ")
+  end
   local choices = nested and {
-    "ad inspect call · ao back · aj/ak next/prev box · af text view · a[/a] prev/next page",
-    "ad inspect call · ao back · af text view · ar ask",
-    "ad inspect · ao back · af view",
-    "ad inspect · af text view",
+    build({ { "inspect", "inspect call" }, { "back", "back" }, { "next/prev", "next/prev box" }, { "text_view", "text view" }, { "page_prev/page_next", "prev/next page" } }),
+    build({ { "inspect", "inspect call" }, { "back", "back" }, { "text_view", "text view" }, { "ask", "ask" } }),
+    build({ { "inspect", "inspect" }, { "back", "back" }, { "text_view", "view" } }),
+    build({ { "inspect", "inspect" }, { "text_view", "text view" } }),
   } or branch and {
-    "ad inspect call · aj/ak next/prev box · af text view · ar ask · a[/a] prev/next page",
-    "ad inspect call · af text view · ar ask",
-    "ad inspect · af text view",
+    build({ { "inspect", "inspect call" }, { "next/prev", "next/prev box" }, { "text_view", "text view" }, { "ask", "ask" }, { "page_prev/page_next", "prev/next page" } }),
+    build({ { "inspect", "inspect call" }, { "text_view", "text view" }, { "ask", "ask" } }),
+    build({ { "inspect", "inspect" }, { "text_view", "text view" } }),
   } or {
-    "ae explain · aE explain+context · af text view · ar ask · az recenter · a[/a] prev/next page",
-    "ae explain · aE explain+context · af text view · ar ask",
-    "ae explain · af text view · ar ask",
-    "ae explain · af text view",
+    build({ { "explain", "explain" }, { "explain_context", "explain+context" }, { "text_view", "text view" }, { "ask", "ask" }, { "recenter", "recenter" }, { "page_prev/page_next", "prev/next page" } }),
+    build({ { "explain", "explain" }, { "explain_context", "explain+context" }, { "text_view", "text view" }, { "ask", "ask" } }),
+    build({ { "explain", "explain" }, { "text_view", "text view" }, { "ask", "ask" } }),
+    build({ { "explain", "explain" }, { "text_view", "text view" } }),
   }
-  vim.list_extend(choices, { "af text view · ar ask", "af text view", "af view" })
+  vim.list_extend(choices, {
+    build({ { "text_view", "text view" }, { "ask", "ask" } }),
+    build({ { "text_view", "text view" } }),
+    build({ { "text_view", "view" } }),
+  })
   for _, text in ipairs(choices) do
-    if vim.fn.strdisplaywidth(text) <= width - 6 then
+    if text ~= "" and vim.fn.strdisplaywidth(text) <= width - 6 then
       return text
     end
   end

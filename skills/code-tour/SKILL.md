@@ -3,7 +3,7 @@ name: code-tour
 description: Create interactive Neovim code tours and answer code-tour question, explain, or refine prompts in the originating Claude or Codex conversation.
 ---
 
-Use the code-tour CLI to present code, review changes, or answer an existing tour request. Run `python3 <skill-dir>/scripts/code-tour.py` (called `code-tour` below). It sends stops directly to Neovim over RPC and focuses its Herdr pane. It does not edit source.
+Use the code-tour CLI to present code, review changes, or answer an existing tour request. Run `python3 <skill-dir>/scripts/code-tour.py` (called `code-tour` below). It sends stops directly to Neovim over RPC (under Herdr it also focuses the editor's pane). It does not edit source.
 
 ### Save, find and reopen tours
 
@@ -124,9 +124,9 @@ python3 <skill-dir>/scripts/code-tour.py src/example.lua:10-18 src/other.lua:2-8
 
 ### Editor selection
 
-`--pane P` selects a Herdr pane, `session/pane`, or an exact Neovim socket. Otherwise the CLI uses the editor remembered for `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, or `--agent-session KEY`. Without a remembered editor, several editors in the workspace produce exit 2 with a JSON list of choices. Show those choices and ask the user which pane, then rerun with `--pane`. A single matching editor is chosen automatically. Failing that, use the editor whose cwd encloses the files; if none exists, the CLI starts Neovim in a new Herdr tab. `--list` lists registered live instances.
+`--pane P` selects an exact Neovim socket (under Herdr also a pane id or `session/pane`). Otherwise the CLI uses the editor remembered for `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, or `--agent-session KEY`. Without a remembered editor, several editors in the workspace produce exit 2 with a JSON list of choices. Show those choices and ask the user which pane, then rerun with `--pane`. A single matching editor is chosen automatically. Failing that, use the editor whose cwd encloses the files; if none exists, the CLI starts Neovim in a new Herdr tab when running under Herdr, and otherwise reports that no editor was found. `--list` lists registered live instances.
 
-Do not ask for editor confirmation when the CLI already resolves one. If the origin cannot be identified, provide `--origin-session SESSION --origin-pane YOUR_AGENT_PANE`. The origin is the existing conversation answering questions, separately from the Neovim destination.
+Do not ask for editor confirmation when the CLI already resolves one. Under Herdr, if the origin cannot be identified, provide `--origin-session SESSION --origin-pane YOUR_AGENT_PANE`. The origin is the existing conversation answering questions, separately from the Neovim destination.
 
 ### Tour files and compact requests
 

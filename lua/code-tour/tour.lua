@@ -609,11 +609,11 @@ local function tour_path()
   return s.tour_file
 end
 
--- Deliver to the connected agent; open one new Herdr tab for it when none is connected.
+-- Deliver through the configured agent backend (see `agent` in setup()).
 local function deliver(prompt, action, callback)
   conversation.deliver(s.origin, s.root, prompt, action, callback, function(origin)
     s.origin = origin
-  end)
+  end, s.opts and s.opts.agent)
 end
 
 -- Stale explanations (saved tours only) with the boxes that depend on them. The report
@@ -675,7 +675,9 @@ local function warn_stale()
   notify(
     "Stale explanation" .. (#items > 1 and "s" or "") .. ": " .. key
       .. (#names > 0 and ("; linked boxes to refresh: " .. table.concat(names, ", ")) or "")
-      .. ". <leader>ae on a stale box regenerates it and its linked boxes.",
+      .. (require("code-tour.keys").lhs("explain")
+        and (". " .. require("code-tour.keys").lhs("explain") .. " on a stale box regenerates it and its linked boxes.")
+        or ". Explain the box again to regenerate it and its linked boxes."),
     vim.log.levels.WARN
   )
 end
@@ -1761,7 +1763,10 @@ M.render = render
 
 function M.setup(opts)
   s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
-    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true }, opts or {})
+    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "auto" }, opts or {})
+  local agent = s.opts.agent
+  assert(agent == "auto" or agent == "herdr" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
+    'code-tour: agent must be "auto", "herdr", "clipboard" or { send = function(text, action, done) end }')
   for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
     local value = s.opts[name]
     assert(type(value) == "number" and value > 0 and value == math.floor(value), name .. " must be a positive integer")
@@ -1785,53 +1790,34 @@ function M.setup(opts)
   end
   badge.highlight()
   require("code-tour.markdown").highlight()
-  local old_return = vim.fn.maparg("<leader>au", "n", false, true)
-  if old_return.desc == "CodeTour au" then vim.keymap.del("n", "<leader>au") end
-  local mappings = {
-    ah = M.toggle,
-    aj = function()
-      M.next_explanation(1)
-    end,
-    ak = function()
-      M.next_explanation(-1)
-    end,
-    an = function()
-      M.next_snippet(1)
-    end,
-    ap = function()
-      M.next_snippet(-1)
-    end,
-    al = M.list_snippets,
-    ar = M.ask,
-    ae = M.explain,
-    aE = M.explain_with_context,
-    ad = function() M.expand_call() end,
-    ao = M.return_to_caller,
-    af = M.focus,
-    aq = M.stop,
-    az = M.recenter,
-    ["a-"] = function()
-      M.zoom(-1)
-    end,
-    ["a+"] = function()
-      M.zoom(1)
-    end,
-    ["a]"] = function()
-      M.page(1)
-    end,
-    ["a["] = function()
-      M.page(-1)
-    end,
-  }
-  for key, callback in pairs(mappings) do
-    vim.keymap.set("n", "<leader>" .. key, callback, { desc = "CodeTour " .. key })
-  end
-  vim.keymap.set("x", "<leader>ar", function()
-    local a, b = vim.fn.line("v"), vim.fn.line(".")
-    M.ask(nil, "stay", { math.min(a, b), math.max(a, b) })
-  end, { desc = "Ask about selected tour lines" })
-  vim.keymap.set("x", "<leader>ae", M.explain, { desc = "Explain selected code in tour" })
-  vim.keymap.set("x", "<leader>aE", M.explain_with_context, { desc = "Explain selected code with extra context" })
+  require("code-tour.keys").apply(s.opts.keys, {
+    toggle = M.toggle,
+    next = function() M.next_explanation(1) end,
+    prev = function() M.next_explanation(-1) end,
+    next_snippet = function() M.next_snippet(1) end,
+    prev_snippet = function() M.next_snippet(-1) end,
+    list = M.list_snippets,
+    ask = M.ask,
+    explain = M.explain,
+    explain_context = M.explain_with_context,
+    inspect = function() M.expand_call() end,
+    back = M.return_to_caller,
+    text_view = M.focus,
+    stop = M.stop,
+    recenter = M.recenter,
+    zoom_out = function() M.zoom(-1) end,
+    zoom_in = function() M.zoom(1) end,
+    page_next = function() M.page(1) end,
+    page_prev = function() M.page(-1) end,
+    visual = {
+      ask = function()
+        local a, b = vim.fn.line("v"), vim.fn.line(".")
+        M.ask(nil, "stay", { math.min(a, b), math.max(a, b) })
+      end,
+      explain = M.explain,
+      explain_context = M.explain_with_context,
+    },
+  })
   local commands = {
     CodeTourToggle = M.toggle,
     CodeTourStop = M.stop,

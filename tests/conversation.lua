@@ -1,6 +1,6 @@
 local plugin = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin)
-local conversation = require("code-tour.conversation")
+local conversation = require("code-tour.agents.herdr")
 local original = vim.system
 local origin = {
   session = "session",

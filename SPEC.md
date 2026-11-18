@@ -4,7 +4,7 @@ Behavior reference for the plugin, CLI and tour format. For install and quick st
 
 ## Rendering
 
-An RPC code tour for Neovim 0.11+ and Claude/Codex in Herdr. Tours own a separate tab and source window. Every prepared snippet in the current source file has a dim code highlight; the focused code uses the stronger selection highlight. Only the focused explanation box is shown as virtual rows above its code. Inactive snippets have no explanation boxes. Notes wrap to at most 100 columns and align to code indentation, reducing indentation when necessary to leave 40 columns for the frame. Explanation boxes describe general behavior; examples appear only as source-line annotations. Q&A and shortcut hints belong to the focused box. Blank virtual rows surround the frame.
+An RPC code tour for Neovim 0.11+ driven by Claude or Codex (Herdr is optional). Tours own a separate tab and source window. Every prepared snippet in the current source file has a dim code highlight; the focused code uses the stronger selection highlight. Only the focused explanation box is shown as virtual rows above its code. Inactive snippets have no explanation boxes. Notes wrap to at most 100 columns and align to code indentation, reducing indentation when necessary to leave 40 columns for the frame. Explanation boxes describe general behavior; examples appear only as source-line annotations. Q&A and shortcut hints belong to the focused box. Blank virtual rows surround the frame.
 
 Each render clears the tour namespace from every buffer, restores the muted highlights for all prepared snippets in the active file, and draws the focused frame as one `virt_lines` decoration. Removed diff lines at that anchor follow its frame. Source lines use `CodeTourFocus` for the active part and `CodeTourStop` for the remaining prepared ranges. Decorations are scoped to the tour window, so other views of the same buffer stay clear. Switching files highlights that file's snippets and shows only its selected explanation. Source text, modified state and `changedtick` stay unchanged.
 
@@ -58,7 +58,7 @@ Selection order: explicit `--pane`, editor remembered for the Claude/Codex sessi
 
 ## Questions and explanations
 
-Questions return through `herdr agent prompt`. The composer offers stay, follow, and add (paste without sending). The exact `--answer S.K --pane P` command accompanies the box note, code/selection, example and thread. `<leader>ae` adds an explanation for selected code; `<leader>aE` opens a multiline box for extra context first. Without a visual selection, they explain the current box or cursor line. Both work in any source file while a tour is active. Selections inside a snippet get new explanation boxes at the containing box; other selections get new stops in source order. The request captures the selection and stable insertion target, so concurrent fills retain their places. `:CodeTourDefinition` separately uses LSP definitions or same-file Tree-sitter name lookup.
+Questions and explanation requests return to the authoring agent through the configured agent backend (see Configuration). The composer offers stay, follow, and add (paste without sending). The exact `--answer S.K --pane P` command accompanies the box note, code/selection, example and thread. `<leader>ae` adds an explanation for selected code; `<leader>aE` opens a multiline box for extra context first. Without a visual selection, they explain the current box or cursor line. Both work in any source file while a tour is active. Selections inside a snippet get new explanation boxes at the containing box; other selections get new stops in source order. The request captures the selection and stable insertion target, so concurrent fills retain their places. `:CodeTourDefinition` separately uses LSP definitions or same-file Tree-sitter name lookup.
 
 Examples are opt-in and continue through connected snippets, refinements and callee expansions once requested. The agent chooses a concrete method/snippet input and returns context metadata in `example.input` and `example.output`, with `example.values` for every executed assignment, computed expression, call result, branch decision, state change and return statement. A result is still output when the input stays unchanged or a return simply forwards another call's result. For `return this.bubbleEvent(type, event);`, show the recursive call's result and the returned value. Actual `false`, `0`, `""`, `null` and `undefined` results must be shown. Skip scaffolding, comments, blank lines and operations with neither a useful result nor an observable effect; never write `unchanged`. Untaken branches are labeled as not reached, or demonstrated with clearly labeled alternate inputs and results. The renderer hides blank labels and legacy `unchanged` annotations. Example data survives fills, but never appears in explanation boxes or the text-only explanation view. New tours without an example request omit examples.
 
@@ -91,6 +91,61 @@ Review uses `git show REF:path` (HEAD by default) or a stop's explicit `old` tex
 | `<leader>aq` | Quit and cancel pending requests |
 
 Composer: Ctrl-S stay/submit context, Ctrl-F follow, Ctrl-A add without sending, Ctrl-B save draft, Escape normal mode, q close. Question and explanation-context drafts are separate. Virtual rows are not selectable source text; `<leader>af` opens the full note and Q&A as plain text in a centered view, without examples, the inline frame or shortcut hints. It supports visual selection and yank, tracks box navigation, and q/Escape returns to source. Commands include `CodeTourLoad [path]`, `CodeTourAsk [question]`, `CodeTourExplain`, `CodeTourExplainContext`, `CodeTourDefinition`, `CodeTourExpand`, `CodeTourReturn`, `CodeTourReview [REF]`, `CodeTourList`, `CodeTourToggle`, `CodeTourFocus`, `CodeTourRecenter`, `CodeTourCancel`, and `CodeTourStop`.
+
+## Configuration
+
+All options are passed to `require("code-tour").setup(opts)`:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `agent` | `"auto"` | How the editor sends prompts back to the agent: `"auto"`, `"herdr"`, `"clipboard"` or `{ send = fn }` |
+| `keys` | see below | Key mappings; `false` for no mappings |
+| `page_lines` | `18` | Upper page budget for explanation boxes |
+| `smooth_scroll` | `true` | Animate navigation (needs Snacks) |
+| `walk` | `true` | Graph-driven navigation; `false` counts top-level snippets only |
+| `saved_batch_size` | `12` | Boxes per regeneration request for a reopened saved tour |
+| `saved_batch_chars` | `40000` | Approximate captured-code characters per regeneration batch |
+| `saved_request_timeout_ms` | `300000` | Timeout per regeneration batch |
+| `saved_reuse_unverified` | `true` | Reuse unverified authored prose while its saved code is unchanged |
+
+### Agent backends
+
+The agent-to-editor direction (showing a tour, answering, filling) is plain RPC and needs no multiplexer. `agent` only controls the editor-to-agent direction: questions, "explain this" requests and lazy definitions.
+
+- `"auto"` (default): `"herdr"` when the tour was authored under Herdr or `HERDR_SESSION` is set, otherwise `"clipboard"`.
+- `"herdr"`: delivers the prompt to the authoring agent's pane (stay, follow or paste), checks that the conversation is still live, and starts an agent in a new tab when none is connected. Needs the `herdr` binary (`HERDR_BIN_PATH` overrides it).
+- `"clipboard"`: copies the prompt (including the exact reply command) to the `+` and `"` registers and tells you to paste it into your agent. The reply still arrives through the CLI.
+- `{ send = function(text, action, done) ... end }`: your own transport. `action` is `"stay"`, `"follow"` or `"add"`; call `done(true)` or `done(false, "reason")`. For example, with tmux:
+
+```lua
+agent = {
+  send = function(text, action, done)
+    vim.system({ "tmux", "send-keys", "-t", "agent-pane", "-l", text }, {}, function(r)
+      done(r.code == 0, r.stderr)
+    end)
+  end,
+}
+```
+
+### Keys
+
+`keys` maps an action to a left-hand side; set an action to `false` to leave it unmapped, or set `keys = false` to define none. Actions marked * also work on a visual selection. Unknown action names are an error. On-screen hints follow your mappings (a leading `<leader>` is omitted from them).
+
+| Action | Default | Action | Default |
+| --- | --- | --- | --- |
+| `toggle` | `<leader>ah` | `inspect` | `<leader>ad` |
+| `next` | `<leader>aj` | `back` | `<leader>ao` |
+| `prev` | `<leader>ak` | `text_view` | `<leader>af` |
+| `next_snippet` | `<leader>an` | `stop` | `<leader>aq` |
+| `prev_snippet` | `<leader>ap` | `recenter` | `<leader>az` |
+| `list` | `<leader>al` | `zoom_out` | `<leader>a-` |
+| `ask`* | `<leader>ar` | `zoom_in` | `<leader>a+` |
+| `explain`* | `<leader>ae` | `page_next` | `<leader>a]` |
+| `explain_context`* | `<leader>aE` | `page_prev` | `<leader>a[` |
+
+```lua
+opts = { keys = { next = "<C-j>", prev = "<C-k>", stop = "<leader>tq", zoom_in = false } }
+```
 
 ## Saved tours
 

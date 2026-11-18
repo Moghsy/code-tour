@@ -11,7 +11,7 @@ Interactive code tours in Neovim, written by Claude or Codex. The agent picks th
 
 - Neovim 0.11+
 - Python 3 (standard library only)
-- Claude Code or Codex running in Herdr for the agent side
+- Claude Code or Codex to write the tours. Herdr is optional and only used for agent-side conveniences.
 - Optional: [snacks.nvim](https://github.com/folke/snacks.nvim) for animated scrolling
 
 ## Install
@@ -55,7 +55,23 @@ bin/code-tour src/main.lua:10-18
 | `<leader>ah` | Show / hide boxes |
 | `<leader>aq` | Quit the tour |
 
-The full key list, commands, tour format, saved tours and options are in [SPEC.md](SPEC.md).
+## Configuration
+
+```lua
+opts = {
+  agent = "auto",   -- "auto" | "herdr" | "clipboard" | { send = function(text, action, done) end }
+  keys = {          -- any action; false disables it, `keys = false` disables all
+    next = "<leader>aj",
+    prev = "<leader>ak",
+  },
+  page_lines = 18,
+  smooth_scroll = true,
+}
+```
+
+`agent` controls how questions and explain requests get back to your agent. Without Herdr, the default copies the prompt to your clipboard to paste into the agent. A custom `send` function can use tmux, a terminal API or anything else. Every key action, the agent backends and the remaining options are in [SPEC.md](SPEC.md#configuration).
+
+The commands, tour format and saved tours are also in [SPEC.md](SPEC.md).
 
 ## Tests
 

@@ -1,4 +1,4 @@
--- Match the multiline composer used by config.herdr-ai (<leader>ac).
+-- Multiline composer for questions and explanation context.
 local M = {}
 local popup
 local drafts = {}

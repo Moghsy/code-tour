@@ -13,8 +13,17 @@ end
 
 function M.hints(width, _, count)
   local rows, row = {}, {}
-  local items = { "aj/ak", "an/ap", "al list", "ar ask", "af select", "aq stop" }
-  if count and count > 1 then table.insert(items, 3, "a[/a] pages") end
+  local keys = require("code-tour.keys")
+  local function item(label, text) return label and (text and (label .. " " .. text) or label) or nil end
+  local items = {
+    keys.pair("next", "prev"), keys.pair("next_snippet", "prev_snippet"),
+    item(keys.label("list"), "list"), item(keys.label("ask"), "ask"),
+    item(keys.label("text_view"), "select"), item(keys.label("stop"), "stop"),
+  }
+  items = vim.tbl_filter(function(x) return x end, items)
+  if count and count > 1 and keys.pair("page_prev", "page_next") then
+    table.insert(items, math.min(3, #items + 1), keys.pair("page_prev", "page_next") .. " pages")
+  end
   for _, item in ipairs(items) do
     local chunks = { { item, "CodeTourMeta" } }
     if #row > 0 and cells(row) + 3 + cells(chunks) > width then rows[#rows + 1] = row; row = {} end

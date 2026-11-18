@@ -1788,6 +1788,7 @@ function M.setup(opts)
     spec.default = true
     vim.api.nvim_set_hl(0, name, spec)
   end
+  badge.configure(s.opts.badge)
   badge.highlight()
   require("code-tour.markdown").highlight()
   require("code-tour.keys").apply(s.opts.keys, {

@@ -1,5 +1,37 @@
 local M = {}
 
+-- Padding (in cells) inside each end of a badge, and rounded end caps. The caps are the
+-- Powerline half-circle glyphs, so they need a Nerd Font; set `rounded = false` otherwise.
+local config = { padding = 1, rounded = true }
+
+function M.configure(opts)
+  opts = opts or {}
+  config = { padding = 1, rounded = true }
+  if opts.padding ~= nil then
+    assert(type(opts.padding) == "number" and opts.padding >= 0, "badge.padding must be a non-negative number")
+    config.padding = math.floor(opts.padding)
+  end
+  if opts.rounded ~= nil then config.rounded = opts.rounded and true or false end
+end
+
+-- Highlight for a cap: the badge colour as foreground over whatever the line shows.
+local function cap_group(group)
+  local name = group .. "Cap"
+  local background = vim.api.nvim_get_hl(0, { name = group, link = false }).bg
+  vim.api.nvim_set_hl(0, name, { fg = background })
+  return name
+end
+
+-- Virtual text at one end of a badge. Left: cap then padding. Right: padding then cap.
+local function edge(group, left)
+  local cap = config.rounded and { vim.fn.nr2char(left and 0xe0b6 or 0xe0b4), cap_group(group) } or nil
+  local pad = config.padding > 0 and { string.rep(" ", config.padding), group } or nil
+  local chunks = {}
+  local function add(chunk) if chunk then chunks[#chunks + 1] = chunk end end
+  if left then add(cap); add(pad) else add(pad); add(cap) end
+  return chunks
+end
+
 function M.highlight()
   vim.api.nvim_set_hl(0, "CodeTourCall", {
     fg = "#f0dfe2", bg = "#5c3038", ctermfg = 188, ctermbg = 52, bold = true,
@@ -72,6 +104,19 @@ function M.draw(buf, ns, first_row, first_col, last_row, last_col, next_call, cu
           virt_text = { { line:sub(first + 1, last), group } },
           virt_text_pos = "overlay", hl_mode = "replace",
         })
+        -- Padding and rounded caps sit only on the outer ends of the whole badge.
+        local left = row == first_row and edge(group, true) or {}
+        local right = row == last_row and edge(group, false) or {}
+        if #left > 0 then
+          vim.api.nvim_buf_set_extmark(buf, ns, row, first, {
+            virt_text = left, virt_text_pos = "inline", priority = 1000,
+          })
+        end
+        if #right > 0 then
+          vim.api.nvim_buf_set_extmark(buf, ns, row, last, {
+            virt_text = right, virt_text_pos = "inline", priority = 1000,
+          })
+        end
       end
     end
   end

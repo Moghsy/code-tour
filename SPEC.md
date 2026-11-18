@@ -100,6 +100,7 @@ All options are passed to `require("code-tour").setup(opts)`:
 | --- | --- | --- |
 | `agent` | `"herdr"` | How the editor sends prompts back to the agent: `"herdr"`, `"auto"`, `"clipboard"` or `{ send = fn }` |
 | `keys` | see below | Key mappings; `false` for no mappings |
+| `badge` | `{ padding = 1, rounded = true }` | Call badges: padding cells inside each end, and rounded end caps. Caps are Powerline glyphs and need a Nerd Font; set `rounded = false` without one. |
 | `page_lines` | `18` | Upper page budget for explanation boxes |
 | `smooth_scroll` | `true` | Animate navigation (needs Snacks) |
 | `saved_batch_size` | `12` | Boxes per regeneration request for a reopened saved tour |

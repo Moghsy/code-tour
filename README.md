@@ -65,3 +65,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cli.py
 ```
 
 The other test files are listed in [SPEC.md](SPEC.md#tests). No test calls a live model.
+
+## License
+
+[MIT](LICENSE)

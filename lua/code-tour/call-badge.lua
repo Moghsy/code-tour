@@ -2,11 +2,11 @@ local M = {}
 
 -- Padding (in cells) inside each end of a badge, and rounded end caps. The caps are the
 -- Powerline half-circle glyphs, so they need a Nerd Font; set `rounded = false` otherwise.
-local config = { padding = 1, rounded = true }
+local config = { padding = 0, rounded = true }
 
 function M.configure(opts)
   opts = opts or {}
-  config = { padding = 1, rounded = true }
+  config = { padding = 0, rounded = true }
   if opts.padding ~= nil then
     assert(type(opts.padding) == "number" and opts.padding >= 0, "badge.padding must be a non-negative number")
     config.padding = math.floor(opts.padding)

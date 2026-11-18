@@ -313,14 +313,14 @@ class RPCIntegrationTests(unittest.TestCase):
             cells = [request('nvim__inspect_cell', [1, row, column]) for column in range(position['col'] - 2, position['col'] + 40)]
             glyphs = [cell[0] for cell in cells]
             left = glyphs.index('\ue0b6')
-            # Left cap, one padding cell, the call text, one padding cell, right cap, in a row.
+            # Left cap, the call text, right cap, in a row (no padding by default).
             symbol = 'handlerStack.bubbleEvent'
-            self.assertEqual(''.join(glyphs[left:left + 2 + len(symbol)]), '\ue0b6 ' + symbol)
-            right = left + 2 + len(symbol) + 1
+            self.assertEqual(''.join(glyphs[left:left + 1 + len(symbol)]), '\ue0b6' + symbol)
+            right = left + 1 + len(symbol)
             self.assertEqual(glyphs[right], '\ue0b4')
             for index in range(left + 1, right):  # padding and every text cell carry the badge colour
                 self.assertEqual(cells[index][1]['background'], badge_bg, glyphs[index])
-            for index in range(left + 2, right - 1):
+            for index in range(left + 1, right):
                 self.assertEqual(cells[index][1]['foreground'], badge_fg, glyphs[index])
             for index in (left, right):  # caps: badge colour over the line background
                 self.assertEqual(cells[index][1]['foreground'], badge_bg)

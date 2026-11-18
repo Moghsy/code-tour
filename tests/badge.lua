@@ -16,12 +16,12 @@ local function inline()
   table.sort(out, function(a, b) return a.row == b.row and a.col < b.col or a.row < b.row end)
   return out
 end
--- defaults: rounded caps plus one cell of padding at both ends
+-- defaults: rounded caps, no padding
 badge.draw(buf, ns, 0, 10, 0, 17, true, true)
 local got = inline()
 assert(#got == 2, vim.inspect(got))
-assert(got[1].col == 10 and got[1].text == vim.fn.nr2char(0xe0b6) .. " ", vim.inspect(got[1]))
-assert(got[2].col == 17 and got[2].text == " " .. vim.fn.nr2char(0xe0b4), vim.inspect(got[2]))
+assert(got[1].col == 10 and got[1].text == vim.fn.nr2char(0xe0b6), vim.inspect(got[1]))
+assert(got[2].col == 17 and got[2].text == vim.fn.nr2char(0xe0b4), vim.inspect(got[2]))
 assert(vim.api.nvim_get_hl(0, { name = "CodeTourCurrentCallCap" }).fg == vim.api.nvim_get_hl(0, { name = "CodeTourCurrentCall" }).bg)
 -- no rounding, two cells of padding
 vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)

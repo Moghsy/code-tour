@@ -12,14 +12,14 @@ The plugin, Lua namespace, CLI and authoring skill are named `code-tour`; editor
 
 ```sh
 # JSON list on stdin, a prepared file, or quick ranges:
-local-plugins/code-tour.nvim/bin/code-tour --file /tmp/tour.json
-local-plugins/code-tour.nvim/bin/code-tour src/main.lua:10-18
-local-plugins/code-tour.nvim/bin/code-tour --append --file /tmp/more.json
-local-plugins/code-tour.nvim/bin/code-tour --review --base HEAD~1 --file /tmp/tour.json
+bin/code-tour --file /tmp/tour.json
+bin/code-tour src/main.lua:10-18
+bin/code-tour --append --file /tmp/more.json
+bin/code-tour --review --base HEAD~1 --file /tmp/tour.json
 
 # Respond using the exact command supplied by the editor:
-local-plugins/code-tour.nvim/bin/code-tour --answer 1.2 --pane /path/to/nvim.sock < /tmp/answer.md
-local-plugins/code-tour.nvim/bin/code-tour --fill REQUEST_ID --pane /path/to/nvim.sock < /tmp/definition.json
+bin/code-tour --answer 1.2 --pane /path/to/nvim.sock < /tmp/answer.md
+bin/code-tour --fill REQUEST_ID --pane /path/to/nvim.sock < /tmp/definition.json
 ```
 
 `show`, `answer`, and `fill` are also accepted as subcommands. A stop has `file,start,end,title,note`, optional `parts:[{start,end,note}]`, `example:{input,output,values}`, and `old` (the replaced text for review). Start/end are inclusive current line numbers. Parts must cover the snippet without gaps. Values map absolute line numbers to text or `{value,detail}` and appear at line ends. Example input/output are context metadata for questions and definition requests; they are not shown in explanation boxes. `examples` aliases `example`. Existing version-1 `snippets/sections` files still load with `:CodeTourLoad`.
@@ -77,10 +77,10 @@ Composer: Ctrl-S stay/submit context, Ctrl-F follow, Ctrl-A add without sending,
 Saved tours live in a central library for the current Neovim profile. Save, list and open are explicit operations:
 
 ```sh
-local-plugins/code-tour.nvim/bin/code-tour saved save --title 'Authentication'
-local-plugins/code-tour.nvim/bin/code-tour saved list --limit 5
-local-plugins/code-tour.nvim/bin/code-tour saved open TOUR_ID --pane SOCKET
-local-plugins/code-tour.nvim/bin/code-tour saved save --overwrite TOUR_ID --revision REVISION
+bin/code-tour saved save --title 'Authentication'
+bin/code-tour saved list --limit 5
+bin/code-tour saved open TOUR_ID --pane SOCKET
+bin/code-tour saved save --overwrite TOUR_ID --revision REVISION
 ```
 
 Every ordinary save creates a distinct entry. Titles may repeat; use the stable ID to open or overwrite. Listing returns `{tours, issues}` with IDs, titles, UTC save times, repository labels/roots and exact-file SHA-256 revisions, sorted by most recent explicit save then ID. It reads JSON using Python's standard library and needs no editor, MessagePack, Herdr or source access. A missing library returns an empty list without creating it. Malformed and unsupported entries are reported individually.

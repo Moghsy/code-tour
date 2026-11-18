@@ -1,6 +1,6 @@
 # State-machine view
 
-Status: proposal. Nothing here is implemented yet. It adds a **state machine** layer inside the tour JSON (see [SPEC.md](SPEC.md)): states are snippets, steps are parts, transitions are edges. It is drawn in the terminal in sync with the tour, and every node can be opened, asked about and handed to an agent.
+Status: implemented (v1; see "What shipped" at the end). It adds a **state machine** layer inside the tour JSON (see [SPEC.md](SPEC.md)): states are snippets, steps are parts, transitions are edges. It is drawn in the terminal in sync with the tour, and every node can be opened, asked about and handed to an agent.
 
 ## Where the idea comes from
 
@@ -75,7 +75,7 @@ An ordinary tour (see `skills/code-tour/SKILL.md`) gains an optional top-level `
         "steps": [
           {"part": "fix.begin-try", "kind": "computer", "status": "fixing"},
           {"part": "fix.fix",       "kind": "agent", "model": "muse-ember", "effort": "xhigh",
-           "prompt": {"file": "src/sm/jobs/fixer/prompts/fix.md", "start": 1, "end": 40}},
+           "prompt": "fix.prompt"},
           {"part": "fix.check",     "kind": "computer", "feedback": true}
         ],
         "on": {
@@ -97,7 +97,7 @@ Rules:
 
 - **Identity.** A new optional `id` on stops and parts (unique in the tour, `[a-z0-9._-]`). A state's `id` is the id of its stop; a step's `part` is the id of a part of that stop. A state with no stop (a terminal such as `released`, or a pure router) is allowed; it just has no code box.
 - **State:** `id`, `steps[]` (optional), then at most one of `next` (an unconditional transition) or `on` (a named decision with `outcomes[]`), or `exit: true` with an optional `end` value.
-- **Step:** `part` (required for anything with code), `kind` of `computer` or `agent`, and for `agent` the `model`, `effort` and an optional `prompt` (a file range; it becomes a part of the state's stop so it can be explained and asked about like any other code). Optional `status` (the status chip) and `feedback` (the result goes to the next agent step).
+- **Step:** `part` (required for anything with code), `kind` of `computer` or `agent`, and for `agent` the `model`, `effort` and an optional `prompt` (the `id` of a stop on the prompt file, so it can be explained and asked about like any other code). Optional `status` (the status chip) and `feedback` (the result goes to the next agent step).
 - **Outcome / transition:** `to` (a state id) or `exit` (leave the machine), `happy: true` for the route `aj` follows, and optional `when` guards (`visits`, `below`, `to`) with an `otherwise`. A transition to the same or an earlier state is a loop, and the view draws it that way.
 - **Machine:** `path` (breadcrumb), `start`, `catch[]` (error name to state), `on_abort`, and the optional `only_on_catch` list on states reachable only by a catch.
 - **Strict loading**, like the rest of the tour. Unknown state or part ids, a duplicate id, a transition to nowhere, two `happy` outcomes in one state, or a step whose part is not in its state's stop are load errors that name the entry. Nothing is guessed or defaulted.
@@ -221,3 +221,16 @@ opts = {
 2. **One machine or many.** The spec has one `machine` per tour. A program with several machines can use several tours or, later, a list. Say if you want a list now.
 3. **Prompt data flow.** The data-flow check is a separate phase. Do you want it?
 4. **Images.** The thread's screenshots stay out of this repository; they belong to their author. Refer to the thread.
+
+## What shipped (v1)
+
+Implemented: the schema and its validation (`lua/code-tour/machine.lua`), the graph edges and the walk (`graph.lua`, `walk.lua`), the view with margin brackets (`lua/code-tour/machine-view.lua`), the `:CodeTourMachine [float|tab|split]` command and the `machine` key, the `{stops, machine}` payload through the CLI, saved tours that keep the machine and the authored ids, and the skill section. Tests: `tests/machine.lua` and a real-RPC test in `tests/test_cli.py`.
+
+Where it differs from the text above:
+
+- **Step prompts** are the `id` of a stop on the prompt file, not a file range (a part must lie inside its stop's file and range). `p` in the view jumps to it.
+- **Optional transitions** (failures, loops, catches, exits) are opened from the machine view with `<CR>` / `gd`; they do not go through `<leader>ad` and have no return stack, so `ao` does not apply to them. Use `ak`, the picker or the view to go back.
+- **Catches and `on_abort`** link from the start state in the graph.
+- **The bracket under the cursor is not highlighted** yet.
+- **Not built:** the prompt data-flow phase (`produces`, diagnostics, completion).
+- **Questions:** `<leader>ar` in the view jumps to the row's box and opens the normal composer there. Transition-specific questions (about the edge) are not built.

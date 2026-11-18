@@ -60,7 +60,7 @@ function M.build(state, id_of, tour)
   end
   local links, seen = {}, {}
   local function link(from, to, relation, extra)
-    local dedupe = table.concat({ from, to, relation, extra.from_box or "" }, "|")
+    local dedupe = table.concat({ from, to, relation, extra.from_box or "", extra.label or "" }, "|")
     if seen[dedupe] then
       return
     end
@@ -82,15 +82,20 @@ function M.build(state, id_of, tour)
       })
     end
   end
-  -- The main route: consecutive top-level snippets.
-  local previous
-  for _, stop in ipairs(stops.roots(state.stops)) do
-    local node = stop_node[stop]
-    if node then
-      if previous and previous ~= node then
-        link(previous.id, node.id, "next", { via = "sequence" })
+  if state.machine then
+    -- With a machine, its transitions are the route and consecutive snippets are not.
+    M.machine_links(state, stop_node, link, id_of)
+  else
+    -- The main route: consecutive top-level snippets.
+    local previous
+    for _, stop in ipairs(stops.roots(state.stops)) do
+      local node = stop_node[stop]
+      if node then
+        if previous and previous ~= node then
+          link(previous.id, node.id, "next", { via = "sequence" })
+        end
+        previous = node
       end
-      previous = node
     end
   end
   -- Different snippets that cover some of the same lines (stale code affects both).
@@ -102,7 +107,84 @@ function M.build(state, id_of, tour)
       end
     end
   end
-  return { directed = true, multigraph = false, graph = { kind = "code-tour", tour = tour }, nodes = nodes, links = links }
+  local start
+  if state.machine then
+    local machine = state.machine
+    start = M.machine_node(state, stop_node, machine.start)
+  end
+  return { directed = true, multigraph = false, graph = { kind = "code-tour", tour = tour, start = start and start.id or nil }, nodes = nodes, links = links }
+end
+
+-- The graph node of a state, following states with no code (they only route) to the
+-- next state that has some. nil when the chain never reaches a snippet.
+function M.machine_node(state, stop_node, id, seen)
+  local machine = state.machine
+  seen = seen or {}
+  if seen[id] then return nil end
+  seen[id] = true
+  local item = machine.by_id[id]
+  for _, candidate in ipairs(state.stops) do
+    if item.stop and candidate.id == item.stop then return stop_node[candidate] end
+  end
+  local happy = item.next
+  for _, outcome in ipairs(item.on and item.on.outcomes or {}) do
+    if outcome.happy then happy = outcome.to end
+  end
+  return happy and M.machine_node(state, stop_node, happy, seen) or nil
+end
+
+-- Edges of the machine: the happy transition of each state is a `next` link (walked, like
+-- the sequence of a plain tour); everything else is `optional` and left to the reader.
+function M.machine_links(state, stop_node, link, id_of)
+  local machine = require("code-tour.machine")
+  local list = state.machine
+  local function stop_of(id)
+    for _, stop in ipairs(state.stops) do
+      if stop.id == id then return stop end
+    end
+  end
+  local function last_box(item)
+    local stop = item.stop and stop_of(item.stop)
+    local last
+    for _, step in ipairs(item.steps) do
+      if step.part then last = step.part end
+    end
+    if not stop then return nil end
+    for _, box in ipairs(stops.boxes(stop)) do
+      if last and box.id == last then return id_of(stop, box) end
+    end
+    return id_of(stop, stop)
+  end
+  for _, item in ipairs(list.states) do
+    local from = M.machine_node(state, stop_node, item.id)
+    if from and item.stop then
+      for _, edge in ipairs(machine.edges(list, item)) do
+        local to = M.machine_node(state, stop_node, edge.target)
+        if to then
+          local happy = edge.happy
+          local kind = happy and "transition" or (edge.loop and "loop" or (edge.exit and "exit" or "branch"))
+          link(from.id, to.id, happy and "next" or "optional", {
+            via = "machine", kind = kind, label = edge.label, guard = edge.guard,
+            from_box = (not happy) and last_box(item) or nil,
+          })
+        end
+      end
+      for _, step in ipairs(item.steps) do
+        local prompt = step.prompt and stop_of(step.prompt)
+        local to = prompt and stop_node[prompt]
+        if to and to ~= from then
+          link(from.id, to.id, "optional", { via = "machine", kind = "prompt", label = step.name, from_box = last_box(item) })
+        end
+      end
+    end
+  end
+  local start = M.machine_node(state, stop_node, list.start)
+  for _, item in ipairs(list.catch) do
+    local to = M.machine_node(state, stop_node, item.to)
+    if start and to then link(start.id, to.id, "optional", { via = "machine", kind = "catch", label = "catch " .. item.error }) end
+  end
+  local abort = list.on_abort and M.machine_node(state, stop_node, list.on_abort)
+  if start and abort then link(start.id, abort.id, "optional", { via = "machine", kind = "abort", label = "on abort" }) end
 end
 
 function M.write(graph, path)

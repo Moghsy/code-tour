@@ -262,12 +262,12 @@ end
 function M.hydrate_saved(item, location, entries)
   local source = require("code-tour.source")
   local stop = { title = item.title, path = location.path, file = location.path, buf = location.buf,
-    parts = {}, _saved_stop = item, _saved_stop_id = item.id }
+    parts = {}, _saved_stop = item, _saved_stop_id = item.id, id = item.tour_id }
   identity(stop)
   for index, entry in ipairs(entries) do
     if entry.capture then
       local box = index == 1 and stop or {}
-      if box ~= stop then identity(box); stop.parts[#stop.parts + 1] = box end
+      if box ~= stop then identity(box); box.id = entry.model and entry.model.tour_id; stop.parts[#stop.parts + 1] = box end
       box.start, box["end"] = source.lines(entry.capture.range)
       box.byte_range, box._saved, box._saved_id = vim.deepcopy(entry.capture.range), entry, entry.id
       box.note = entry.status == "ready" and entry.model.note or "Loading explanation…"

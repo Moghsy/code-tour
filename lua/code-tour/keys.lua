@@ -10,6 +10,7 @@ M.defaults = {
   prev_snippet = "<leader>ap",
   list = "<leader>al",
   tree = "<leader>at",
+  machine = "<leader>aM",
   ask = "<leader>ar",
   explain = "<leader>ae",
   explain_context = "<leader>aE",

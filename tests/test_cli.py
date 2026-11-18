@@ -232,6 +232,19 @@ class RPCIntegrationTests(unittest.TestCase):
         self.assertEqual(cli.rpc(address, 'return #require("tour").state().stops[1].parts'), 2)
         self.assertEqual(self.source.read_text(), 'local x = 1\nlocal y = 2\nreturn x + y\n')
 
+    def test_tour_with_a_state_machine_over_real_rpc(self):
+        address = self.addresses[1]
+        payload = dict(
+            stops=[dict(id='first', file='source.lua', start=1, end=2, note='Setup'),
+                   dict(id='second', file='source.lua', start=3, end=3, note='Result')],
+            machine=dict(start='first', states=[dict(id='first', next='second'), dict(id='second', exit=True)]))
+        self.run_cli('--pane', address, data=json.dumps(payload))
+        self.assertEqual(cli.rpc(address, 'return require("tour").state().machine.start'), 'first')
+        self.assertEqual(cli.rpc(address, 'return #require("tour").state().stops'), 2)
+        payload['machine']['states'][0]['next'] = 'nowhere'
+        result = self.run_cli('--pane', address, data=json.dumps(payload), expected=1)
+        self.assertIn('unknown state', result.stderr + result.stdout)
+
     def test_review_old_and_validation_errors_are_atomic(self):
         address = self.addresses[0]
         data = [dict(file='source.lua', start=1, end=2, note='Review', old='old input\n')]

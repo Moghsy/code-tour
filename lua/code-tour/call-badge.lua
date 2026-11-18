@@ -14,17 +14,30 @@ function M.configure(opts)
   if opts.rounded ~= nil then config.rounded = opts.rounded and true or false end
 end
 
--- Highlight for a cap: the badge colour as foreground over whatever the line shows.
-local function cap_group(group)
-  local name = group .. "Cap"
+-- Highlight for a cap: the badge colour as foreground, over the line's background (so the
+-- rounded corner blends into the line) when `line_bg` is given.
+local function cap_group(group, line_bg)
+  local name = group .. "Cap" .. (line_bg and string.format("%06x", line_bg) or "")
   local background = vim.api.nvim_get_hl(0, { name = group, link = false }).bg
-  vim.api.nvim_set_hl(0, name, { fg = background })
+  vim.api.nvim_set_hl(0, name, { fg = background, bg = line_bg })
   return name
 end
 
+-- Background the tour draws behind a row: its highest-priority line highlight, if any.
+local function line_background(buf, ns, row)
+  local best, priority
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, { row, 0 }, { row, -1 }, { details = true })) do
+    local details = mark[4]
+    if details.line_hl_group and (not priority or (details.priority or 0) >= priority) then
+      best, priority = details.line_hl_group, details.priority or 0
+    end
+  end
+  return best and vim.api.nvim_get_hl(0, { name = best, link = false }).bg or nil
+end
+
 -- Virtual text at one end of a badge. Left: cap then padding. Right: padding then cap.
-local function edge(group, left)
-  local cap = config.rounded and { vim.fn.nr2char(left and 0xe0b6 or 0xe0b4), cap_group(group) } or nil
+local function edge(group, left, line_bg)
+  local cap = config.rounded and { vim.fn.nr2char(left and 0xe0b6 or 0xe0b4), cap_group(group, line_bg) } or nil
   local pad = config.padding > 0 and { string.rep(" ", config.padding), group } or nil
   local chunks = {}
   local function add(chunk) if chunk then chunks[#chunks + 1] = chunk end end
@@ -109,9 +122,8 @@ function M.contains(range, line, col)
     and (row > range[1] or col >= range[2]) and (row < range[3] or col < range[4])
 end
 
--- Replace the rendered glyphs with identical source text on a solid badge
--- background. A range highlight alone inherits the tour's blue line background.
--- `next_call` marks a gold call; `current` is the gold call the walk takes next.
+-- Draw a badge: the call text on a solid background with padding and rounded caps at its
+-- outer ends. `next_call` marks a gold call; `current` is the gold call the walk takes next.
 function M.draw(buf, ns, first_row, first_col, last_row, last_col, next_call, current, done, folded)
   local group = current and "CodeTourCurrentCall" or done and "CodeTourDoneCall" or folded and "CodeTourFoldedCall"
     or next_call and "CodeTourNextCall" or "CodeTourCall"
@@ -122,14 +134,24 @@ function M.draw(buf, ns, first_row, first_col, last_row, last_col, next_call, cu
       local last = row == last_row and last_col or #line
       first, last = math.min(first, #line), math.min(last, #line)
       if last > first then
+        -- The badge is drawn as one overlay (cap, padding, text, padding, cap) with hl_mode
+        -- "replace", so it beats the tour's line background. Inline virtual text of the same
+        -- width sits at the badge ends to reserve those cells, so the source text is pushed
+        -- aside instead of being painted over.
+        local line_bg = line_background(buf, ns, row)
+        local left = row == first_row and edge(group, true, line_bg) or {}
+        local right = row == last_row and edge(group, false, line_bg) or {}
+        -- Neovim anchors an overlay at column 0 after the inline text, but elsewhere at its
+        -- start. At column 0 the overlay therefore holds only the text; the inline pieces
+        -- draw their own caps and padding (their explicit colours already beat the line).
+        local overlay = {}
+        if first > 0 then vim.list_extend(overlay, left) end
+        overlay[#overlay + 1] = { line:sub(first + 1, last), group }
+        if first > 0 then vim.list_extend(overlay, right) end
         vim.api.nvim_buf_set_extmark(buf, ns, row, first, {
           end_col = last, hl_group = group, priority = 1000,
-          virt_text = { { line:sub(first + 1, last), group } },
-          virt_text_pos = "overlay", hl_mode = "replace",
+          virt_text = overlay, virt_text_pos = "overlay", hl_mode = "replace",
         })
-        -- Padding and rounded caps sit only on the outer ends of the whole badge.
-        local left = row == first_row and edge(group, true) or {}
-        local right = row == last_row and edge(group, false) or {}
         if #left > 0 then
           vim.api.nvim_buf_set_extmark(buf, ns, row, first, {
             virt_text = left, virt_text_pos = "inline", priority = 1000,

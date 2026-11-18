@@ -169,7 +169,9 @@ local function test()
     vim.api.nvim_get_namespaces().CodeTourSource, 0, -1, { details = true })) do
     if mark[2] == 0 and mark[4].hl_group == "CodeTourCall" then class_badge = mark end
   end
-  check(class_badge and class_badge[4].virt_text[1][1] == "KeyHandlerMode" and badges() == 2,
+  local class_text = false
+  for _, chunk in ipairs(class_badge and class_badge[4].virt_text or {}) do class_text = class_text or chunk[1] == "KeyHandlerMode" end
+  check(class_badge and class_text and badges() == 2,
     "A generated superclass explanation badges the exact class name while retaining the method badge")
   before = #sent
   vim.api.nvim_win_set_cursor(state().win, { 1, subclass[1]:find("KeyHandlerMode", 1, true) - 1 })

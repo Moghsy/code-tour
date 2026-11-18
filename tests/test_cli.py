@@ -306,16 +306,26 @@ class RPCIntegrationTests(unittest.TestCase):
               vim.cmd("redraw")
               local s=tour.state()
               return vim.fn.screenpos(s.win,1,1)''', [str(file), str(self.root)]])
-            colour = request('nvim_exec_lua', ['''local hl=vim.api.nvim_get_hl(0,{name="CodeTourCall",link=false})
-              return {hl.bg, hl.fg}''', []])
-            # The badge is a left cap and one padding cell, the call text, then padding and a cap.
-            padding = request('nvim__inspect_cell', [1, position['row'] - 1, position['col']])
-            text = request('nvim__inspect_cell', [1, position['row'] - 1, position['col'] + 2])
-            self.assertEqual(padding[0], ' ')
-            self.assertEqual(padding[1]['background'], colour[0])
-            self.assertEqual(text[0], 'a')
-            self.assertEqual(text[1]['background'], colour[0])
-            self.assertEqual(text[1]['foreground'], colour[1])
+            colours = request('nvim_exec_lua', ['''local function hl(name) return vim.api.nvim_get_hl(0,{name=name,link=false}) end
+              return {hl("CodeTourCall").bg, hl("CodeTourCall").fg, hl("CodeTourFocus").bg}''', []])
+            badge_bg, badge_fg, line_bg = colours
+            row = position['row'] - 1
+            cells = [request('nvim__inspect_cell', [1, row, column]) for column in range(position['col'] - 2, position['col'] + 40)]
+            glyphs = [cell[0] for cell in cells]
+            left = glyphs.index('\ue0b6')
+            # Left cap, one padding cell, the call text, one padding cell, right cap, in a row.
+            symbol = 'handlerStack.bubbleEvent'
+            self.assertEqual(''.join(glyphs[left:left + 2 + len(symbol)]), '\ue0b6 ' + symbol)
+            right = left + 2 + len(symbol) + 1
+            self.assertEqual(glyphs[right], '\ue0b4')
+            for index in range(left + 1, right):  # padding and every text cell carry the badge colour
+                self.assertEqual(cells[index][1]['background'], badge_bg, glyphs[index])
+            for index in range(left + 2, right - 1):
+                self.assertEqual(cells[index][1]['foreground'], badge_fg, glyphs[index])
+            for index in (left, right):  # caps: badge colour over the line background
+                self.assertEqual(cells[index][1]['foreground'], badge_bg)
+                self.assertEqual(cells[index][1]['background'], line_bg)
+            self.assertEqual(''.join(glyphs[right + 1:right + 7]), '(event')
             request('nvim_ui_detach', [])
 
     def test_failed_definition_lookup_round_trip_over_rpc(self):

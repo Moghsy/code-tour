@@ -1761,21 +1761,14 @@ function M.state()
 end
 M.render = render
 
-function M.setup(opts)
-  s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
-    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "herdr" }, opts or {})
-  local agent = s.opts.agent
-  assert(agent == "herdr" or agent == "auto" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
-    'code-tour: agent must be "herdr", "auto", "clipboard" or { send = function(text, action, done) end }')
-  for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
-    local value = s.opts[name]
-    assert(type(value) == "number" and value > 0 and value == math.floor(value), name .. " must be a positive integer")
-  end
-  assert(type(s.opts.saved_reuse_unverified) == "boolean", "saved_reuse_unverified must be a boolean")
-  require("code-tour.instance").register()
+-- Snippet highlights follow the colorscheme: the focused range uses its Visual background and
+-- the other prepared ranges a softer mix of it. `default = true` lets a user override any group.
+local function highlights()
+  local normal_bg = badge.theme("Normal", "bg", 0x1a1b26)
+  local visual = badge.theme("Visual", "bg", 0x314888)
   for name, spec in pairs({
-    CodeTourStop = { bg = "#273668" },
-    CodeTourFocus = { bg = "#314888" },
+    CodeTourStop = { bg = badge.blend(normal_bg, visual, 0.55) },
+    CodeTourFocus = { bg = visual },
     CodeTourDiffAdd = { bg = "#25352e" },
     CodeTourDiffAddFocus = { bg = "#314b3a" },
     CodeTourDiffDelete = { fg = "#b87d85", bg = "#39252d" },
@@ -1788,6 +1781,21 @@ function M.setup(opts)
     spec.default = true
     vim.api.nvim_set_hl(0, name, spec)
   end
+end
+
+function M.setup(opts)
+  s.opts = vim.tbl_extend("force", { page_lines = 18, smooth_scroll = true, saved_request_timeout_ms = 300000,
+    saved_batch_size = 12, saved_batch_chars = 40000, saved_reuse_unverified = true, agent = "herdr" }, opts or {})
+  local agent = s.opts.agent
+  assert(agent == "herdr" or agent == "auto" or agent == "clipboard" or (type(agent) == "table" and type(agent.send) == "function"),
+    'code-tour: agent must be "herdr", "auto", "clipboard" or { send = function(text, action, done) end }')
+  for _, name in ipairs({ "saved_request_timeout_ms", "saved_batch_size", "saved_batch_chars" }) do
+    local value = s.opts[name]
+    assert(type(value) == "number" and value > 0 and value == math.floor(value), name .. " must be a positive integer")
+  end
+  assert(type(s.opts.saved_reuse_unverified) == "boolean", "saved_reuse_unverified must be a boolean")
+  require("code-tour.instance").register()
+  highlights()
   badge.configure(s.opts.badge)
   badge.highlight()
   require("code-tour.markdown").highlight()
@@ -1840,6 +1848,23 @@ function M.setup(opts)
   end, { nargs = "?", complete = "file", force = true })
   vim.api.nvim_create_user_command("CodeTourZoomOut", function() M.zoom(-1) end, { force = true })
   vim.api.nvim_create_user_command("CodeTourZoomIn", function() M.zoom(1) end, { force = true })
+  vim.api.nvim_create_user_command("CodeTourBadgeColors", function(args)
+    local arg = args.args
+    if arg == "" or arg == "next" or arg == "prev" then
+      notify("Badge colours: " .. badge.cycle(arg == "prev" and -1 or 1), vim.log.levels.INFO)
+    elseif badge.select(arg) then
+      notify("Badge colours: " .. arg, vim.log.levels.INFO)
+    else
+      notify("Unknown badge palette: " .. arg)
+    end
+  end, {
+    nargs = "?", force = true,
+    complete = function()
+      local names = { "next", "prev", "theme" }
+      for _, p in ipairs(badge.palettes) do names[#names + 1] = p[1] end
+      return names
+    end,
+  })
   vim.api.nvim_create_user_command("CodeTourGraph", function()
     local ok, result = pcall(M.graph)
     notify(ok and ("Tour graph: " .. result.path) or result, ok and vim.log.levels.INFO or vim.log.levels.WARN)
@@ -1867,7 +1892,7 @@ function M.setup(opts)
       end
     end,
   })
-  vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = badge.highlight })
+  vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = function() highlights(); badge.highlight() end })
   vim.api.nvim_create_autocmd({ "VimResized", "WinResized", "TabEnter" }, {
     group = group,
     callback = function()

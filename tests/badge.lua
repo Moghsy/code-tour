@@ -42,3 +42,46 @@ got = inline()
 assert(#got == 2 and got[1].row == 0 and got[1].col == 10 and got[2].row == 1 and got[2].col == 6, vim.inspect(got))
 assert(not pcall(badge.configure, { padding = -1 }))
 print("badge OK")
+
+-- colours follow the colorscheme and are re-derived when it changes
+badge.configure({ palette = "theme" })
+vim.cmd("colorscheme habamax")
+badge.highlight()
+local function hl(name) return vim.api.nvim_get_hl(0, { name = name, link = false }) end
+local info = hl("DiagnosticInfo").fg
+assert(hl("CodeTourCurrentCall").bg == info and hl("CodeTourCurrentLabel").fg == info)
+assert(hl("CodeTourCurrentCall").fg == hl("Normal").bg)
+local first = hl("CodeTourDoneCall").bg
+vim.cmd("colorscheme default")
+vim.cmd("set background=light")
+badge.highlight()
+assert(hl("CodeTourDoneCall").bg ~= first, "visited colour did not follow the colorscheme")
+assert(hl("CodeTourCurrentCall").bg == hl("DiagnosticInfo").fg)
+print("badge theme OK")
+
+-- the default is the sky / sand palette
+badge.configure({})
+badge.highlight()
+assert(hl("CodeTourCurrentCall").bg == tonumber("7ab8ff", 16) and hl("CodeTourDoneCall").bg == tonumber("6b6250", 16), "default palette is sky / sand")
+assert(not pcall(badge.configure, { palette = "nope" }))
+badge.configure({ palette = "theme" })
+
+-- manual palette cycling: next/prev wrap, caps follow, theme slot restores derived colours
+vim.cmd("colorscheme habamax")
+badge.highlight()
+local derived = hl("CodeTourCurrentCall").bg
+assert(badge.cycle(1) == "cyan / grey")
+assert(hl("CodeTourCurrentCall").bg == tonumber("4fc1d9", 16))
+assert(hl("CodeTourCurrentCallCap").fg == tonumber("4fc1d9", 16), "cap does not match the badge colour")
+assert(hl("CodeTourDoneCallCap").fg == hl("CodeTourDoneCall").bg)
+assert(badge.cycle(1) == "orange / green")
+assert(badge.cycle(-1) == "cyan / grey")
+assert(badge.cycle(-1) == "theme" and hl("CodeTourCurrentCall").bg == derived)
+assert(badge.cycle(-1) == "coral / steel", "wraps backwards past the theme slot")
+vim.api.nvim_exec_autocmds("ColorScheme", {})
+badge.highlight() -- a colorscheme change keeps the chosen palette
+assert(hl("CodeTourCurrentCall").bg == tonumber("ff7f6b", 16))
+assert(badge.select("theme") and hl("CodeTourCurrentCall").bg == derived)
+assert(badge.select("mint / maroon") and hl("CodeTourDoneCall").bg == tonumber("7a3a48", 16))
+assert(badge.select("nope") == false and hl("CodeTourDoneCall").bg == tonumber("7a3a48", 16), "unknown palette keeps the current one")
+print("badge cycle OK")

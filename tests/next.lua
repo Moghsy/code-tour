@@ -85,7 +85,7 @@ local function test()
   end
   check(gold == 1 and red == 1 and label == 1 and example == 1, "Gold and red calls coexist with the label and example")
   vim.api.nvim_exec_autocmds("ColorScheme", {})
-  check(vim.api.nvim_get_hl(0, { name = "CodeTourNextCall" }).bg == tonumber("e5b94f", 16), "Colorscheme changes restore gold")
+  check(vim.api.nvim_get_hl(0, { name = "CodeTourNextCall" }).bg == vim.api.nvim_get_hl(0, { name = "DiagnosticWarn", link = false }).fg, "Colorscheme changes re-derive gold from the theme warning colour")
 
   local calls = require("code-tour.stops").calls_in(state().stops, state().stops[1], state().stops[1].parts[2])
   tour.expand_call(calls[2])

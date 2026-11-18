@@ -1,5 +1,26 @@
 local M = {}
 
+-- Named palettes for the next and visited badges, for trying colours with M.cycle().
+-- { name, next_bg, next_fg, visited_bg, visited_fg }
+M.palettes = {
+  { "cyan / grey", "#4fc1d9", "#06222a", "#4a4f5a", "#aab0bd" },
+  { "orange / green", "#f2994a", "#2a1704", "#3f6b4a", "#bfe3c8" },
+  { "lime / slate", "#a6e22e", "#1a2606", "#44506a", "#b9c3d9" },
+  { "pink / teal", "#ff79c6", "#2b0a1d", "#2f6f6a", "#c3ebe7" },
+  { "sky / sand", "#7ab8ff", "#08203d", "#6b6250", "#e6dcc3" },
+  { "mint / maroon", "#5ee6b0", "#052b1d", "#7a3a48", "#f0cdd4" },
+  { "yellow / indigo", "#ffe066", "#2e2504", "#4b4a8f", "#d6d5f5" },
+  { "coral / steel", "#ff7f6b", "#2e0d07", "#566f8a", "#d3e0ee" },
+}
+local DEFAULT_PALETTE = "sky / sand"
+local palette = 0 -- index into M.palettes; 0 = colours derived from the colorscheme
+
+local function find_palette(name)
+  if name == "theme" then return 0 end
+  for i, p in ipairs(M.palettes) do if p[1] == name then return i end end
+end
+
+
 -- Padding (in cells) inside each end of a badge, and rounded end caps. The caps are the
 -- Powerline half-circle glyphs, so they need a Nerd Font; set `rounded = false` otherwise.
 local config = { padding = 1, rounded = true }
@@ -12,6 +33,10 @@ function M.configure(opts)
     config.padding = math.floor(opts.padding)
   end
   if opts.rounded ~= nil then config.rounded = opts.rounded and true or false end
+  local name = opts.palette == nil and DEFAULT_PALETTE or opts.palette
+  local found = find_palette(name)
+  assert(found, "badge.palette must be \"theme\" or one of the names in require(\"code-tour.call-badge\").palettes")
+  palette = found
 end
 
 -- Highlight for a cap: the badge colour as foreground over whatever the line shows.
@@ -32,34 +57,87 @@ local function edge(group, left)
   return chunks
 end
 
+local function channels(color) return math.floor(color / 65536) % 256, math.floor(color / 256) % 256, color % 256 end
+
+-- Mix `from` toward `to` by `amount` (0..1), both 24-bit colours.
+local function blend(from, to, amount)
+  local fr, fg, fb = channels(from)
+  local tr, tg, tb = channels(to)
+  local function mix(a, b) return math.floor(a + (b - a) * amount + 0.5) end
+  return mix(fr, tr) * 65536 + mix(fg, tg) * 256 + mix(fb, tb)
+end
+
+-- Colour of a theme group (`attr` is "fg" or "bg"), or `fallback` when it has none.
+local function theme(name, attr, fallback)
+  local value = vim.api.nvim_get_hl(0, { name = name, link = false })[attr]
+  return value or fallback
+end
+
+M.blend, M.theme = blend, theme
+
+local BADGES = {
+  "CodeTourCall", "CodeTourNextCall", "CodeTourCurrentCall", "CodeTourDoneCall", "CodeTourFoldedCall",
+}
+
+-- Keep every badge's cap group in step with its colour.
+local function refresh_caps()
+  for _, group in ipairs(BADGES) do cap_group(group) end
+end
+
+local function apply_palette()
+  local p = M.palettes[palette]
+  if not p then return end
+  local function set(name, spec) vim.api.nvim_set_hl(0, name, spec) end
+  set("CodeTourCurrentCall", { fg = p[3], bg = p[2], bold = true })
+  set("CodeTourCurrentLabel", { fg = p[2], bold = true })
+  set("CodeTourDoneCall", { fg = p[5], bg = p[4], bold = true })
+  set("CodeTourDoneLabel", { fg = p[4], bold = true })
+  refresh_caps()
+end
+
+-- Step through the palettes (step = 1 or -1); the slot before the first is the theme-derived
+-- default. Returns the active palette's name.
+function M.cycle(step)
+  palette = (palette + (step or 1)) % (#M.palettes + 1)
+  M.highlight()
+  return palette == 0 and "theme" or M.palettes[palette][1]
+end
+
+-- Select a palette by name ("theme" for the colorscheme-derived default); false if unknown.
+function M.select(name)
+  local found = find_palette(name)
+  if not found then return false end
+  palette = found
+  M.highlight()
+  return true
+end
+
+-- Badge colours are derived from the active colorscheme: accent colours come from its
+-- diagnostic groups, text and muted tones from Normal and Comment. tour.lua re-runs it on ColorScheme.
 function M.highlight()
-  vim.api.nvim_set_hl(0, "CodeTourCall", {
-    fg = "#f0dfe2", bg = "#5c3038", ctermfg = 188, ctermbg = 52, bold = true,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourNextCall", {
-    fg = "#241b08", bg = "#e5b94f", ctermfg = 235, ctermbg = 179, bold = true,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourCurrentCall", {
-    fg = "#0b2414", bg = "#6fd08c", ctermfg = 235, ctermbg = 114, bold = true,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourCurrentLabel", {
-    fg = "#6fd08c", ctermfg = 114, bold = true,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourFoldedCall", {
-    fg = "#bfb08a", bg = "#3d3622", ctermfg = 144, ctermbg = 58,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourFoldedLabel", {
-    fg = "#9a8a5a", ctermfg = 101,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourDoneCall", {
-    fg = "#e8def7", bg = "#6a4f8f", ctermfg = 189, ctermbg = 97, bold = true,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourDoneLabel", {
-    fg = "#a98fd0", ctermfg = 140, bold = true,
-  })
-  vim.api.nvim_set_hl(0, "CodeTourNextLabel", {
-    fg = "#e5b94f", ctermfg = 179, bold = true,
-  })
+  local normal_bg = theme("Normal", "bg", vim.o.background == "light" and 0xffffff or 0x1a1b26)
+  local normal_fg = theme("Normal", "fg", vim.o.background == "light" and 0x1a1b26 or 0xc0caf5)
+  local muted = theme("Comment", "fg", blend(normal_bg, normal_fg, 0.5))
+  local info = theme("DiagnosticInfo", "fg", 0x4fc1d9)
+  local warn = theme("DiagnosticWarn", "fg", 0xe5b94f)
+  local err = theme("DiagnosticError", "fg", 0xf7768e)
+  local function set(name, spec) vim.api.nvim_set_hl(0, name, spec) end
+  -- Solid accent badges use the background colour for text so they read in any scheme.
+  local function solid(name, accent) set(name, { fg = normal_bg, bg = accent, bold = true }) end
+  local function soft(name, accent, strength)
+    set(name, { fg = normal_fg, bg = blend(normal_bg, accent, strength), bold = true })
+  end
+  soft("CodeTourCall", err, 0.45)                 -- optional call
+  solid("CodeTourNextCall", warn)                 -- later gold call
+  solid("CodeTourCurrentCall", info)              -- the call the walk takes next
+  set("CodeTourCurrentLabel", { fg = info, bold = true })
+  set("CodeTourNextLabel", { fg = warn, bold = true })
+  soft("CodeTourDoneCall", muted, 0.35)           -- visited
+  set("CodeTourDoneLabel", { fg = muted, bold = true })
+  soft("CodeTourFoldedCall", warn, 0.25)
+  set("CodeTourFoldedLabel", { fg = blend(normal_bg, warn, 0.6) })
+  refresh_caps()
+  apply_palette()
 end
 
 function M.range(buf, site)

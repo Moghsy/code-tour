@@ -45,8 +45,8 @@ local function colors()
       )
     )
   do
-    if mark[4].line_hl_group then
-      groups[mark[2] + 1] = mark[4].line_hl_group
+    if mark[4].hl_eol then
+      groups[mark[2] + 1] = mark[4].hl_group
     end
     for _, row in ipairs(mark[4].virt_lines or {}) do
       for _, chunk in ipairs(row) do

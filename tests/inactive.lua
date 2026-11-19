@@ -17,11 +17,11 @@ local ns = vim.api.nvim_create_namespace("CodeTourSource")
 local function drawn(buf)
   local text, groups, anchors, highlights = {}, {}, {}, {}
   for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
-    if mark[4].line_hl_group then
+    if mark[4].hl_eol then
       local line = mark[2] + 1
       local previous = highlights[line]
       if not previous or mark[4].priority >= previous.priority then
-        highlights[line] = { group = mark[4].line_hl_group, priority = mark[4].priority }
+        highlights[line] = { group = mark[4].hl_group, priority = mark[4].priority }
       end
     end
     if mark[4].virt_lines then

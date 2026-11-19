@@ -107,15 +107,21 @@ local function window()
   vim.api.nvim__ns_set(ns, { wins = { s.win } })
 end
 
+-- A whole-line background. It is an `hl_eol` range rather than `line_hl_group`, because a
+-- line highlight overrides every range highlight's background and would hide call badges.
+local function paint_line(buf, line, group, priority)
+  vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, {
+    end_row = line, end_col = 0, hl_group = group, hl_eol = true, priority = priority, strict = false,
+  })
+end
+
 local function decorate(stop, box, layout)
   clear()
   local count = vim.api.nvim_buf_line_count(stop.buf)
   for _, other in ipairs(s.stops) do
     if other ~= stop and other.buf == stop.buf and stops.ready(other) then
       for line = other.start, math.min(other["end"], count) do
-        vim.api.nvim_buf_set_extmark(stop.buf, ns, line - 1, 0, {
-          line_hl_group = (other.added or {})[line] and "CodeTourDiffAdd" or "CodeTourStop", priority = 100,
-        })
+        paint_line(stop.buf, line, (other.added or {})[line] and "CodeTourDiffAdd" or "CodeTourStop", 100)
       end
     end
   end
@@ -125,7 +131,7 @@ local function decorate(stop, box, layout)
     if (stop.added or {})[line] then
       group = focused and "CodeTourDiffAddFocus" or "CodeTourDiffAdd"
     end
-    vim.api.nvim_buf_set_extmark(stop.buf, ns, line - 1, 0, { line_hl_group = group, priority = 110 })
+    paint_line(stop.buf, line, group, 110)
   end
   if box.byte_range and not box._unlocated then
     local r = box.byte_range
@@ -149,6 +155,7 @@ local function decorate(stop, box, layout)
   end
   -- Call badges stay visible whichever box is focused: every prepared call of this
   -- snippet, and of the other snippets shown in the same buffer.
+  local badges = {}
   for _, owner in ipairs(s.stops) do
     if owner.buf == stop.buf and (owner == stop or stops.ready(owner)) then
       for _, call in ipairs(stops.calls_in(s.stops, owner, owner, true)) do
@@ -164,11 +171,13 @@ local function decorate(stop, box, layout)
             and done[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
           local is_folded = call.next == true and not current and not finished
             and folded[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
-          badge.draw(stop.buf, ns, range[1], range[2], range[3], range[4], call.next, current, finished, is_folded)
+          badges[#badges + 1] = { range = range, next_call = call.next, current = current,
+            done = finished, folded = is_folded }
         end
       end
     end
   end
+  badge.draw_all(stop.buf, ns, badges)
   local example = box.example or stop.example
   for line, value in pairs((example or {}).values or {}) do
     local label = type(value) == "table" and value.value or value

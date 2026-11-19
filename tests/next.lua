@@ -73,9 +73,8 @@ local function test()
       gold = gold + 1
       check(mark[2] == 2 and mark[3] == source[3]:find("service.process", 1, true) - 1,
         "Gold badge covers the invoked receiver and method")
-      local has_text = false
-      for _, chunk in ipairs(details.virt_text) do has_text = has_text or chunk[1] == "service.process" end
-      check(has_text and details.hl_mode == "replace", "Gold glyphs keep source text")
+      check(not details.virt_text and details.end_col - mark[3] == #"service.process",
+        "Gold badge highlights the source text itself")
     elseif details.hl_group == "CodeTourCall" then red = red + 1 end
     for _, chunk in ipairs(details.virt_text or {}) do
       if chunk[1]:find("<- next snippet", 1, true) then

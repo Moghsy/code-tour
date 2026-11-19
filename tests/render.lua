@@ -128,8 +128,8 @@ local function test()
     if mark[4].virt_lines then
       frames[#frames + 1] = mark
     end
-    if mark[4].line_hl_group then
-      groups[mark[2] + 1] = mark[4].line_hl_group
+    if mark[4].hl_eol then
+      groups[mark[2] + 1] = mark[4].hl_group
     end
   end
   check(

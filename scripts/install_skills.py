@@ -10,6 +10,8 @@ parser.add_argument('--home', type=Path, default=Path.home())
 args = parser.parse_args()
 source = Path(__file__).resolve().parents[1] / 'skills/code-tour'
 stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+resources = sorted((source / 'references').rglob('*.md'))
+resources.extend([source / 'scripts/code-tour.py', source / 'SKILL.md'])
 
 def install(destination, origin):
     if destination.exists() and destination.read_bytes() == origin.read_bytes():
@@ -34,8 +36,8 @@ for discovery in ('.agents', '.codex', '.claude'):
             # Preserve an existing installation without leaving two active skills.
             old_skill = legacy / 'SKILL.md'
             old_skill.rename(old_skill.with_name('SKILL.md.backup-' + stamp))
-    for relative in ('SKILL.md', 'scripts/code-tour.py'):
-        install(target / relative, source / relative)
+    for resource in resources:
+        install(target / resource.relative_to(source), resource)
     # Commands already delivered to an agent may still name this exact script.
     install(legacy / 'scripts/walkthrough.py', source / 'scripts/code-tour.py')
     print(target)

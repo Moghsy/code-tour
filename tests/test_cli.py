@@ -122,6 +122,14 @@ class SkillMigrationTests(unittest.TestCase):
             self.assertEqual(next((target / 'scripts').glob('code-tour.py.backup-*')).read_text(), 'original user script\n')
             self.assertFalse((legacy / 'SKILL.md').exists())
             self.assertTrue((legacy / 'scripts/walkthrough.py').is_file())
+            source = PLUGIN / 'skills/code-tour'
+            links = re.findall(r'\]\((references/[^)#]+)(?:#[^)]*)?\)', (source / 'SKILL.md').read_text())
+            self.assertTrue(links)
+            for discovery in ('.agents', '.codex', '.claude'):
+                installed = home / discovery / 'skills/code-tour'
+                for relative in set(links):
+                    with self.subTest(discovery=discovery, reference=relative):
+                        self.assertEqual((installed / relative).read_bytes(), (source / relative).read_bytes())
             env = dict(os.environ, CODE_TOUR_CLI=str(CLI))
             help_result = subprocess.run([sys.executable, str(legacy / 'scripts/walkthrough.py'), '--help'],
                                          env=env, check=True, capture_output=True, text=True)

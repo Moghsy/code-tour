@@ -1,6 +1,6 @@
 # State-machine view
 
-Status: proposal. Nothing here is implemented yet. It adds a **state machine** layer inside the tour JSON (see [SPEC.md](SPEC.md)): states are snippets, steps are parts, transitions are edges. It is drawn in the terminal in sync with the tour, and every node can be opened, asked about and handed to an agent.
+Status: proposal. Nothing here is implemented yet. It adds a **state machine** layer inside the tour JSON (see [SPEC-old.md](SPEC-old.md)): states are snippets, steps are parts, transitions are edges. It is drawn in the terminal in sync with the tour, and every node can be opened, asked about and handed to an agent.
 
 ## Where the idea comes from
 

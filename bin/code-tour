@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Show code tours and return answers/fills over Neovim's MessagePack RPC socket (stdlib only)."""
 import argparse
+from copy import deepcopy
 from datetime import datetime
 import hashlib
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -364,7 +366,11 @@ def read_stops(args):
             result.append(dict(file=path, start=int(first), end=int(last or first), title=Path(path).name,
                                note=f'{path}:{first}-{last or first}'))
         return result
-    return json.loads(Path(args.file).read_text() if args.file else sys.stdin.read())
+    text = Path(args.file).read_text() if args.file else sys.stdin.read()
+    if getattr(args, 'fill', None) and re.fullmatch(r'n\d+', args.fill) and not text.lstrip().startswith(('{', '[')):
+        # AST fills are Markdown, one section per box (SPEC-ast-graph §9.3)
+        return text
+    return json.loads(text)
 
 
 def resolve_stops(items, root):
@@ -551,6 +557,374 @@ def graph_main(argv):
     return 0
 
 
+def codegraph_main(argv):
+    parser = argparse.ArgumentParser(description='Write the project symbol graph (graphify node-link JSON) and print its path')
+    parser.add_argument('--out', help='Output file (default: $TMPDIR/code-tour-UID/codegraph.json)')
+    parser.add_argument('--project', type=Path, help='Project directory (default: the git top level of the cwd)')
+    parser.add_argument('--pane', help='Use this running editor (its unsaved buffers count); default: headless Neovim')
+    parser.add_argument('--agent-session')
+    args = parser.parse_args(argv)
+    root = (args.project or Path.cwd()).resolve()
+    opts = dict(root=str(root))
+    if args.out:
+        opts['out'] = str(Path(args.out).resolve())
+    if args.pane:
+        target = choose(instances(), args.pane, session_key(args), root, [])
+        if target is None:
+            raise RuntimeError('No matching editor; check --pane')
+        result = rpc(target['address'], 'return require("code-tour").code_graph(...)', [opts], timeout=120)
+    else:
+        result = headless('codegraph', opts)
+    print(json.dumps(result))
+    return 0
+
+
+def ast_main(argv):
+    parser = argparse.ArgumentParser(
+        prog='code-tour ast',
+        description='Build an AST-backed tour (SPEC-ast-graph.md)')
+    parser.add_argument('entries', nargs='*', help="Entry symbols: 'Type#method', 'Type#method(Params)', 'Type.method', a type, or path:line")
+    parser.add_argument('--auto', action='store_true', help='Choose entries from project structure')
+    override_arguments(parser)
+    parser.add_argument('--through', action='append', default=[], help='A symbol the main flow must pass through (repeatable)')
+    parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
+    parser.add_argument('--dry-run', action='store_true', help='Print the outline; open nothing')
+    parser.add_argument('--json', action='store_true', help='Print JSON: the derived tour (--dry-run) or the show result')
+    parser.add_argument('--project', type=Path, help='Project directory (default: the git top level of the cwd)')
+    parser.add_argument('--pane', help='The editor to use; --dry-run defaults to headless Neovim')
+    parser.add_argument('--agent-session')
+    parser.add_argument('--origin-session')
+    parser.add_argument('--origin-pane')
+    args = parser.parse_args(argv)
+    if not args.entries and not args.auto and not any(item['kind'] == 'add' for item in args.overrides or []):
+        parser.error('pass an entry symbol or --auto')
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0:
+            root = Path(git.stdout.strip()).resolve()
+    request = dict(entries=args.entries, root=str(root), through=args.through)
+    if args.auto:
+        request['auto'] = True
+    if args.overrides:
+        request['overrides'] = args.overrides
+    if args.detail:
+        request['detail'] = args.detail
+    auto_only = args.auto and not args.entries and not any(item['kind'] == 'add' for item in args.overrides or [])
+    if not args.dry_run and not auto_only:
+        # §9.1: the editor builds the tour, shows the whole skeleton and returns the outline.
+        key = session_key(args)
+        target = choose(instances(), args.pane, key, root, [])
+        if target is None:
+            target = launch(root)
+        request['cli'] = str(Path(__file__).resolve())
+        current_origin = origin(args, root)
+        if current_origin is not None:
+            request['origin'] = current_origin
+        result = rpc(target['address'], 'return require("tour").ast_tour(...)', [request], timeout=120)
+        remember(key, target)
+        if result.get('fallback') or args.json:
+            print(json.dumps(result))
+        else:
+            print(result['outline'])
+        return 0
+    if args.pane:
+        target = choose(instances(), args.pane, session_key(args), root, [])
+        if target is None:
+            raise RuntimeError('No matching editor; check --pane')
+        result = rpc(target['address'], 'return require("code-tour").ast_outline(...)', [request], timeout=120)
+    else:
+        result = headless('ast', dict(request=json.dumps(request)))
+    if result.get('fallback'):
+        print(json.dumps(result))
+    elif result.get('auto'):
+        print(json.dumps(result) if args.json else '\n'.join(
+            f"{i}. {item['label']} · {item['file']} · score {item['score']} · {item['callers']} callers · {item['project_sites']} calls"
+            for i, item in enumerate(result['candidates'], 1)))
+    elif args.json:
+        print(json.dumps(result['tour']))
+    else:
+        print(result['outline'])
+    return 0
+
+
+def override_arguments(parser):
+    class Override(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string):
+            overrides = getattr(namespace, self.dest) or []
+            overrides.append(dict(kind=option_string[2:], value=values))
+            setattr(namespace, self.dest, overrides)
+
+    parser.add_argument('--rate', action=Override, dest='overrides', metavar='n1.s2=0', help='Rate a call site')
+    parser.add_argument('--split', action=Override, dest='overrides', metavar='n1.r1@stmt2', help='Split a region')
+    parser.add_argument('--merge', action=Override, dest='overrides', metavar='n1.r1,n1.r2', help='Merge adjacent regions')
+    parser.add_argument('--edge', action=Override, dest='overrides', metavar='n1.s2 -> SYMBOL', help='Supply a call target')
+    parser.add_argument('--add', action=Override, dest='overrides', metavar='JSON', help='Supply a source range as a fallback snippet')
+
+
+def adjust_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour adjust', description='Change a live AST tour (SPEC-ast-graph §9.6, §10)')
+    parser.add_argument('--tour', required=True, help='Tour identity from the outline header')
+    parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
+    parser.add_argument('--pane', help='Neovim socket path (or, under Herdr, a pane id or session/pane)')
+    parser.add_argument('--project', type=Path)
+    parser.add_argument('--json', action='store_true', help='Print the result as JSON instead of the outline')
+    parser.add_argument('--agent-session')
+    override_arguments(parser)
+    args = parser.parse_args(argv)
+    if not (args.detail or args.overrides):
+        parser.error('pass --detail or a structure override')
+    root = (args.project or Path.cwd()).resolve()
+    target = choose(instances(), args.pane, session_key(args), root, [])
+    if target is None:
+        raise RuntimeError('No matching editor; supply the --pane from the outline')
+    opts = {key: value for key, value in dict(detail=args.detail, overrides=args.overrides).items() if value is not None}
+    result = deliver(target, 'ast_adjust', [opts], args.tour, timeout=60)
+    print(json.dumps(result) if args.json else result['outline'])
+    return 0
+
+
+def brief_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour brief', description='Read the agent brief for a live tour snippet')
+    parser.add_argument('snippet')
+    parser.add_argument('--tour', required=True)
+    parser.add_argument('--pane')
+    parser.add_argument('--agent-session')
+    parser.add_argument('--project', type=Path)
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args(argv)
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0:
+            root = Path(git.stdout.strip()).resolve()
+    target = choose(instances(), args.pane, session_key(args), root, [])
+    if target is None:
+        raise RuntimeError('No matching editor; supply the --pane from the outline')
+    result = deliver(target, 'ast_brief', [args.snippet, args.tour], args.tour, timeout=60)
+    print(json.dumps(result) if args.json else result['brief'])
+    return 0
+
+
+def budget_knowledge(result, budget):
+    """Cap knowledge JSON, keeping all gists ahead of any optional body text."""
+    result = deepcopy(result)
+    limit = max(1, budget) * 4
+
+    def size():
+        return len(json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+
+    if size() <= limit:
+        return result
+
+    bodies = []
+
+    def remove_bodies(value):
+        if isinstance(value, dict):
+            if 'body' in value:
+                bodies.append((value, value.pop('body')))
+            for child in list(value.values()):
+                remove_bodies(child)
+        elif isinstance(value, list):
+            for child in value:
+                remove_bodies(child)
+
+    remove_bodies(result)
+    result['truncated'] = True
+
+    # If gists and structure alone exceed the cap, discard optional test metadata,
+    # then trim the ends of ranked result lists. Earlier, higher ranked gists survive.
+    def drop_optional(value):
+        if isinstance(value, dict):
+            value.pop('tests', None)
+            value.pop('example', None)
+            for child in value.values():
+                drop_optional(child)
+        elif isinstance(value, list):
+            for child in value:
+                drop_optional(child)
+
+    drop_optional(result)
+    ranked = {'callers', 'paths', 'results', 'symbols', 'snippets', 'route'}
+
+    def trim_ranked(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in ranked and isinstance(child, list):
+                    while child and size() > limit:
+                        child.pop()
+                trim_ranked(child)
+        elif isinstance(value, list):
+            for child in value:
+                trim_ranked(child)
+
+    trim_ranked(result)
+    if size() <= limit:
+        for owner, body in bodies:
+            owner['body'] = body
+            if size() > limit:
+                owner.pop('body', None)
+        return result
+
+    # A very small budget cannot fit the structural envelope. Return a valid,
+    # explicit truncation marker instead of breaking JSON or exceeding the cap.
+    return {'truncated': True}
+
+
+def knowledge_main(command, argv):
+    parser = argparse.ArgumentParser(prog='code-tour ' + command)
+    if command == 'path':
+        parser.add_argument('symbol')
+        parser.add_argument('target')
+    elif command == 'note':
+        parser.add_argument('symbol')
+        parser.add_argument('file', type=Path, help='Markdown sections to write')
+    elif command == 'search':
+        parser.add_argument('query')
+    else:
+        parser.add_argument('symbol')
+    parser.add_argument('--through', action='append', default=[])
+    parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
+    parser.add_argument('--model')
+    parser.add_argument('--budget', type=int, help='Approximate output cap in tokens')
+    parser.add_argument('--json', action='store_true')
+    parser.add_argument('--project', type=Path)
+    parser.add_argument('--pane', help='Use a running editor (including unsaved buffers)')
+    parser.add_argument('--agent-session')
+    args = parser.parse_args(argv)
+    if args.budget is not None and args.budget < 1:
+        parser.error('--budget must be positive')
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0:
+            root = Path(git.stdout.strip()).resolve()
+    req = dict(root=str(root), symbol=getattr(args, 'symbol', None), target=getattr(args, 'target', None),
+               query=getattr(args, 'query', None), through=args.through, detail=args.detail, model=args.model,
+               budget=args.budget)
+    req = {k: v for k, v in req.items() if v is not None}
+    if command == 'note':
+        req['markdown'] = args.file.read_text()
+        action = 'note'
+    elif command == 'flow':
+        action = 'flow'
+    else:
+        action = command
+    req['action'] = action
+    if args.pane:
+        target = choose(instances(), args.pane, session_key(args), root, [])
+        if target is None:
+            raise RuntimeError('No matching editor; check --pane')
+        result = rpc(target['address'], 'return require("tour").know(...)', [action, req], timeout=120)
+    else:
+        # Markdown is transported through a temporary file so it cannot be mistaken
+        # for a CLI option or truncated by shell argument limits.
+        if command == 'note':
+            with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False) as stream:
+                stream.write(req.pop('markdown'))
+                markdown_path = stream.name
+            try:
+                result = headless('knowledge', dict(request=json.dumps(req), input=markdown_path))
+            finally:
+                Path(markdown_path).unlink(missing_ok=True)
+        else:
+            result = headless('knowledge', dict(request=json.dumps(req)))
+    if args.budget:
+        result = budget_knowledge(result, args.budget)
+    print(json.dumps(result, ensure_ascii=False, indent=None if args.json or args.budget else 2))
+    return 0
+
+
+def store_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour store')
+    parser.add_argument('--prune', action='store_true', required=True)
+    parser.add_argument('--project', type=Path)
+    parser.add_argument('--pane')
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args(argv)
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0: root = Path(git.stdout.strip()).resolve()
+    if args.pane:
+        target = choose(instances(), args.pane, None, root, [])
+        if target is None: raise RuntimeError('No matching editor; check --pane')
+        result = rpc(target['address'], 'return require("tour").store_prune(...)', [dict(root=str(root))], timeout=120)
+    else:
+        result = headless('store', dict(root=str(root)))
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def scenario_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour scenario')
+    parser.add_argument('box', help='Pending question box, such as n1.r2')
+    parser.add_argument('file', type=Path, help='Agent-authored scratch scenario source')
+    parser.add_argument('--tour', required=True)
+    parser.add_argument('--pane')
+    parser.add_argument('--project', type=Path)
+    parser.add_argument('--agent-session')
+    args = parser.parse_args(argv)
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0: root = Path(git.stdout.strip()).resolve()
+    target = choose(instances(), args.pane, session_key(args), root, [])
+    if target is None: raise RuntimeError('No matching editor; supply the --pane from the tour')
+    result = deliver(target, 'ast_scenario', [dict(box=args.box, source=args.file.read_text())], args.tour, timeout=60)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def agent_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour agent')
+    parser.add_argument('operation', choices=('install', 'uninstall'))
+    parser.add_argument('--project', type=Path)
+    args = parser.parse_args(argv)
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0: root = Path(git.stdout.strip()).resolve()
+    begin, end = '<!-- code-tour:section:start -->', '<!-- code-tour:section:end -->'
+    block = '\n'.join((begin, '## code-tour',
+        '- Before changing code you have not read, run `code-tour explain SYMBOL` or `code-tour flow ENTRY`.',
+        '- Before changing behavior or a signature, run `code-tour impact SYMBOL`.',
+        '- Treat notes as orientation and verify them against the source code.', end))
+    changed = []
+    for name in ('CLAUDE.md', 'AGENTS.md'):
+        path = root / name
+        content = path.read_text() if path.exists() else ''
+        managed = re.compile(re.escape(begin) + r'.*?' + re.escape(end), re.DOTALL)
+        if args.operation == 'install':
+            if managed.search(content):
+                updated = managed.sub(lambda _: block, content, count=1)
+            else:
+                updated = content.rstrip() + ('\n\n' if content.strip() else '') + block + '\n'
+        else:
+            updated = managed.sub('', content).rstrip() + ('\n' if content.strip() and managed.search(content) else '') \
+                if managed.search(content) else content
+        if updated != content:
+            path.write_text(updated)
+            changed.append(name)
+    print(json.dumps(dict(operation=args.operation, files=changed, root=str(root))))
+    return 0
+
+
+def headless(command, opts):
+    script = Path(__file__).resolve().parents[1] / 'lua/code-tour/ast/headless.lua'
+    args = [os.environ.get('CODE_TOUR_NVIM', 'nvim'), '--headless', '-u', 'NONE', '-i', 'NONE', '-l', str(script), command]
+    for key, value in opts.items():
+        args += ['--' + key, str(value)]
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=600)
+    lines = [line for line in proc.stdout.splitlines() if line.startswith('{')]
+    if not lines:
+        raise RuntimeError('headless Neovim failed: ' + (proc.stderr or proc.stdout).strip())
+    result = json.loads(lines[-1])
+    if proc.returncode != 0 or 'error' in result:
+        raise RuntimeError(result.get('error') or proc.stderr.strip())
+    return result
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == 'capabilities':
@@ -560,6 +934,22 @@ def main(argv=None):
         return saved_main(argv[1:])
     if argv and argv[0] == 'graph':
         return graph_main(argv[1:])
+    if argv and argv[0] == 'codegraph':
+        return codegraph_main(argv[1:])
+    if argv and argv[0] == 'ast':
+        return ast_main(argv[1:])
+    if argv and argv[0] == 'adjust':
+        return adjust_main(argv[1:])
+    if argv and argv[0] == 'brief':
+        return brief_main(argv[1:])
+    if argv and argv[0] == 'store':
+        return store_main(argv[1:])
+    if argv and argv[0] == 'scenario':
+        return scenario_main(argv[1:])
+    if argv and argv[0] == 'agent':
+        return agent_main(argv[1:])
+    if argv and argv[0] in ('explain', 'flow', 'callers', 'impact', 'path', 'search', 'note'):
+        return knowledge_main(argv[0], argv[1:])
     if argv and argv[0] in ('show', 'answer', 'fill'):
         argv[0] = '--' + argv[0]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -575,6 +965,9 @@ def main(argv=None):
     place.add_argument('--into', '--int', dest='into', metavar='N.K')
     parser.add_argument('--pane', help='Neovim socket path (or, under Herdr, a pane id or session/pane)')
     parser.add_argument('--tour', help='Tour identity supplied by an editor response command')
+    parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'),
+                        help='AST fills: the detail the bodies are written at (default: the tour\'s)')
+    parser.add_argument('--model', help='AST fills: the model that wrote the bodies (recorded with them)')
     parser.add_argument('--project', type=Path)
     parser.add_argument('--file', help='Read stops from JSON file instead of stdin')
     parser.add_argument('--agent-session')
@@ -585,6 +978,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if (args.after is not None or args.into) and not args.fill:
         parser.error('--after/--into require --fill')
+    if (args.detail or args.model) and not args.fill:
+        parser.error('--detail/--model require --fill')
     if args.base and not args.review:
         parser.error('--base requires --review')
     live = instances()
@@ -618,7 +1013,8 @@ def main(argv=None):
         result = deliver(target, 'answer', answer_args, args.tour)
     elif args.fill:
         placement = {key: value for key, value in dict(after=args.after, into=args.into,
-                     review=args.review, base=args.base).items() if value is not None}
+                     review=args.review, base=args.base, detail=args.detail, model=args.model).items()
+                     if value is not None}
         result = deliver(target, 'fill', [args.fill, data, placement], args.tour)
     else:
         # Large nested tours exceed msgpack-RPC's nesting limit, so the editor reads the file itself.

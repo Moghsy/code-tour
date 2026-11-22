@@ -150,14 +150,45 @@ function M.snapshot(buf)
   end
   return snap
 end
-local function stream_digest(snap, first, last)
+local function stream_digest(snap, first, last, omit)
   local values = {}
   for i = first, last do
-    values[#values + 1] = snap.leaves[i].value
+    local value = snap.leaves[i].value
+    if not omit or not omit(value) then
+      values[#values + 1] = value
+    end
   end
   return digest(stable({ M.scheme, snap.language, snap.parser_tag, values }))
 end
-local function indices(snap, range)
+
+local indices
+
+-- AST notes describe executable code and ignore comments. The second digest can
+-- also omit the declaration name when matching an old address after a rename.
+function M.ast_digest(buf, range, declaration_name)
+  local snap = M.snapshot(buf)
+  if not snap or snap.reason or not M.valid_range(buf, range) then
+    return nil
+  end
+  local first, last = indices(snap, range)
+  if not first then
+    return nil
+  end
+  local omitted
+  return stream_digest(snap, first, last, function(value)
+    if value[1]:match("comment") then
+      return true
+    end
+    local path = value[3]
+    local parent = path[#path - 1]
+    if not omitted and declaration_name and value[2] == declaration_name and path[#path][2] == "name"
+        and parent and parent[1]:match("_declaration$") then
+      omitted = true
+      return true
+    end
+  end)
+end
+function indices(snap, range)
   for _, err in ipairs(snap.errors) do
     if le(range.start, err.start) and le(err["end"], range["end"]) then
       return nil, nil, "Missing syntax on selected path"

@@ -42,13 +42,16 @@ local function background(buf, ns, row, col, below)
   return best
 end
 
--- Virtual text at one end of a badge. Left: cap then padding. Right: padding then cap.
-local function edge(group, left, line_bg)
+M.STAR = "★"
+
+-- Virtual text at one end of a badge. Left: cap, padding, then the main-flow star when
+-- `star` is set. Right: padding then cap.
+local function edge(group, left, line_bg, star)
   local cap = config.rounded and { vim.fn.nr2char(left and 0xe0b6 or 0xe0b4), cap_group(group, line_bg) } or nil
   local pad = config.padding > 0 and { string.rep(" ", config.padding), group } or nil
   local chunks = {}
   local function add(chunk) if chunk then chunks[#chunks + 1] = chunk end end
-  if left then add(cap); add(pad) else add(pad); add(cap) end
+  if left then add(cap); add(pad); add(star and { M.STAR .. " ", group } or nil) else add(pad); add(cap) end
   return chunks
 end
 
@@ -71,7 +74,8 @@ end
 M.blend, M.theme = blend, theme
 
 local BADGES = {
-  "CodeTourCall", "CodeTourNextCall", "CodeTourCurrentCall", "CodeTourDoneCall", "CodeTourFoldedCall",
+  "CodeTourCall", "CodeTourNextCall", "CodeTourMainCall", "CodeTourCurrentCall", "CodeTourDoneCall",
+  "CodeTourFoldedCall", "CodeTourGap",
 }
 
 -- Keep every badge's cap group in step with its colour.
@@ -86,6 +90,7 @@ function M.highlight()
   local normal_fg = theme("Normal", "fg", vim.o.background == "light" and 0x1a1b26 or 0xc0caf5)
   local warn = theme("DiagnosticWarn", "fg", 0xe5b94f)
   local err = theme("DiagnosticError", "fg", 0xf7768e)
+  local hint = theme("DiagnosticHint", "fg", 0x1abc9c)
   local function set(name, spec) vim.api.nvim_set_hl(0, name, spec) end
   -- Solid accent badges use the background colour for text so they read in any scheme.
   local function solid(name, accent) set(name, { fg = normal_bg, bg = accent, bold = true }) end
@@ -94,6 +99,10 @@ function M.highlight()
   end
   soft("CodeTourCall", err, 0.45)                 -- optional call
   solid("CodeTourNextCall", warn)                 -- later gold call
+  -- Main flow (SPEC-ast-graph §10): a stronger gold, the theme's warning pulled toward a
+  -- deep amber, so it stands apart from the other gold calls even before the ★ is read.
+  solid("CodeTourMainCall", blend(warn, 0xff9e00, 0.6))
+  set("CodeTourMainLabel", { fg = blend(warn, 0xff9e00, 0.6), bold = true })
   -- Next and visited use fixed colours (sky / sand), the same in every colorscheme.
   set("CodeTourCurrentCall", { fg = "#08203d", bg = "#7ab8ff", bold = true })  -- the call the walk takes next
   set("CodeTourCurrentLabel", { fg = "#7ab8ff", bold = true })
@@ -102,6 +111,10 @@ function M.highlight()
   set("CodeTourDoneLabel", { fg = "#6b6250", bold = true })
   soft("CodeTourFoldedCall", warn, 0.25)
   set("CodeTourFoldedLabel", { fg = blend(normal_bg, warn, 0.6) })
+  -- A gap: where the main flow breaks off (§8.3). The hint accent, italic, so it reads as
+  -- a remark about the code rather than a call to follow.
+  set("CodeTourGap", { fg = normal_fg, bg = blend(normal_bg, hint, 0.4), bold = true, italic = true })
+  set("CodeTourGapLabel", { fg = hint, italic = true })
   refresh_caps()
 end
 
@@ -111,7 +124,7 @@ function M.range(buf, site)
     return { site.start - 1, site.start_col, site["end"] - 1, site.end_col }
   end
   if not site.symbol or site.symbol == "" then return end
-  for line = site.start, site["end"] do
+  for line = site.start, site["end"] or site.start do
     local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, false)[1] or ""
     local first, last = text:find(site.symbol, 1, true)
     if first then
@@ -129,21 +142,31 @@ function M.contains(range, line, col)
     and (row > range[1] or col >= range[2]) and (row < range[3] or col < range[4])
 end
 
+-- A main-flow call keeps the walk's colours for its state (current, visited, folded), so
+-- the walk reads the same on and off the main flow; only a main call still waiting its
+-- turn gets the stronger gold in place of the plain gold. The ★ shows in every state.
 local function group_for(item)
+  if item.gap then return "CodeTourGap" end
   return item.current and "CodeTourCurrentCall" or item.done and "CodeTourDoneCall"
-    or item.folded and "CodeTourFoldedCall" or item.next_call and "CodeTourNextCall" or "CodeTourCall"
+    or item.folded and "CodeTourFoldedCall" or item.next_call and (item.main and "CodeTourMainCall" or "CodeTourNextCall")
+    or "CodeTourCall"
 end
 
 local function label_for(item)
+  if item.gap then
+    return "  <- gap" .. (type(item.gap) == "string" and item.gap ~= "" and (": " .. item.gap) or ""), "CodeTourGapLabel"
+  end
   if item.folded then return "  <- folded (a+ to open)", "CodeTourFoldedLabel" end
   if item.done then return "  <- visited", "CodeTourDoneLabel" end
   return item.current ~= false and "  <- next snippet" or "  <- later snippet",
-    item.current and "CodeTourCurrentLabel" or "CodeTourNextLabel"
+    item.current and "CodeTourCurrentLabel" or item.main and "CodeTourMainLabel" or "CodeTourNextLabel"
 end
 
 -- Draw every badge of a buffer in one pass. Each item is { range = { first_row, first_col,
--- last_row, last_col }, next_call, current, done, folded }: `next_call` marks a gold call,
--- `current` the gold call the walk takes next.
+-- last_row, last_col }, next_call, current, done, folded, main, gap }: `next_call` marks a
+-- gold call, `current` the gold call the walk takes next, `main` a gold call on the main
+-- flow (★ after the left cap), and `gap` (the reason, or true) a site where the main flow
+-- breaks off; a gap is not a call, so it takes no walk state.
 --
 -- A badge is a plain `hl_group` range, so the source text stays real text and several badges
 -- can share a line, sit side by side or nest. Outer badges get lower priorities than the
@@ -193,7 +216,8 @@ function M.draw_all(buf, ns, items)
     })
   end
   for i, b in ipairs(badges) do
-    local left = edge(b.group, true, background(buf, ns, b.first_row, b.first_col, b.priority))
+    local star = b.item.main and b.item.next_call and not b.item.gap
+    local left = edge(b.group, true, background(buf, ns, b.first_row, b.first_col, b.priority), star)
     local right = edge(b.group, false, background(buf, ns, b.last_row, math.max(b.last_col - 1, 0), b.priority))
     if #left > 0 then
       vim.api.nvim_buf_set_extmark(buf, ns, b.first_row, b.first_col, {
@@ -206,14 +230,14 @@ function M.draw_all(buf, ns, items)
       })
     end
   end
-  -- One end-of-line label per row, listing that row's gold calls left to right.
+  -- One end-of-line label per row, listing that row's gold calls and gaps left to right.
   local labels, rows = {}, {}
   table.sort(badges, function(a, b)
     if a.last_row ~= b.last_row then return a.last_row < b.last_row end
     return a.first_col < b.first_col
   end)
   for _, b in ipairs(badges) do
-    if b.item.next_call then
+    if b.item.next_call or b.item.gap then
       if not labels[b.last_row] then labels[b.last_row], rows[#rows + 1] = {}, b.last_row end
       local text, group = label_for(b.item)
       labels[b.last_row][#labels[b.last_row] + 1] = { text, group }

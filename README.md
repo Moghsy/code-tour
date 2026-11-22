@@ -70,9 +70,25 @@ opts = {
 }
 ```
 
-`agent` controls how questions and explain requests get back to your agent. Without Herdr, set `"clipboard"` (or `"auto"`, which falls back to it) to copy the prompt for pasting into the agent. A custom `send` function can use tmux, a terminal API or anything else. Every key action, the agent backends and the remaining options are in [SPEC.md](SPEC.md#configuration).
+`agent` controls how questions and explain requests get back to your agent. Without Herdr, set `"clipboard"` (or `"auto"`, which falls back to it) to copy the prompt for pasting into the agent. A custom `send` function can use tmux, a terminal API or anything else. Every key action, the agent backends and the remaining options are in [SPEC-old.md](SPEC-old.md#configuration).
 
-The commands, tour format and saved tours are also in [SPEC.md](SPEC.md). A proposed state-machine view is in [SPEC-state-machine.md](SPEC-state-machine.md).
+The commands, tour format and saved tours are also in [SPEC-old.md](SPEC-old.md). A proposed state-machine view is in [SPEC-state-machine.md](SPEC-state-machine.md), and AST-backed tours (code representation, extraction, routing, streaming) in [SPEC-ast-graph.md](SPEC-ast-graph.md).
+
+## AST-backed tours
+
+AST tours use Neovim's Tree-sitter parsers. Java is enabled by default. Enable Python in Neovim with `ast = { languages = { "java", "python" } }` in the plugin setup. Use a symbol or a source position to start a tour, or list candidate entry points with `--auto`.
+
+```sh
+code-tour ast 'OrderService#checkout' --detail normal
+CODE_TOUR_AST_LANGUAGES=java,python code-tour ast python:shop.order.checkout --dry-run
+code-tour ast --auto
+```
+
+In Neovim, run `:CodeTourAst` at the cursor, `:CodeTourDetail detailed` to change detail, or `:CodeTourHistory` to reopen a recent tour. Fills automatically persist in the repository's `.code-tour/` store and are reused when the source and walked callees still match. Set `ast.store = "user"` in setup to store them under Neovim's data directory. `code-tour store --prune` prunes the current repository's store.
+
+An agent can inspect the current code with `code-tour explain`, `flow`, `callers`, `impact`, `path`, or `search`. Use `code-tour brief N --tour T` for the code, interfaces, and fill command for one live snippet, and `code-tour --fill N --tour T --model M` to record the model that wrote it.
+
+When a project test reaches the current snippet, `:CodeTourExample` opens the test as an optional snippet. `:CodeTourRecord` captures locals from the selected Java test if nvim-dap and jdtls are configured with Java Debug and Java Test support. Recording requires project consent. Set `ast.examples.record = false` to disable execution.
 
 ## Tests
 
@@ -81,7 +97,7 @@ XDG_STATE_HOME=/tmp/code-tour-tests nvim --clean --headless -l tests/run.lua
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cli.py
 ```
 
-The other test files are listed in [SPEC.md](SPEC.md#tests). No test calls a live model.
+The other test files are listed in [SPEC-old.md](SPEC-old.md#tests). No test calls a live model.
 
 ## License
 

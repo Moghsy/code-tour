@@ -159,7 +159,8 @@ local function decorate(stop, box, layout)
   for _, owner in ipairs(s.stops) do
     if owner.buf == stop.buf and (owner == stop or stops.ready(owner)) then
       for _, call in ipairs(stops.calls_in(s.stops, owner, owner, true)) do
-        local range = badge.range(stop.buf, call.callsite)
+        local folded_optional = call.ast and not call.next and call.level and s.zoom and call.level > s.zoom
+        local range = not folded_optional and badge.range(stop.buf, call.callsite)
         if range then
           local site = call.callsite
           -- nil outside the walk (older labels); true for the edge aj follows next, else false.
@@ -171,16 +172,34 @@ local function decorate(stop, box, layout)
             and done[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
           local is_folded = call.next == true and not current and not finished
             and folded[edge_key(owner.path .. ":" .. owner.start .. "-" .. owner["end"], site)] or nil
+          -- `main` only marks a gold call: a main-flow edge is always walked (SPEC-ast-graph
+          -- §3.7), so a stray `main` on an optional call draws no ★.
           badges[#badges + 1] = { range = range, next_call = call.next, current = current,
-            done = finished, folded = is_folded }
+            done = finished, folded = is_folded, main = call.next == true and call.main == true or nil }
+        end
+      end
+    end
+  end
+  -- Gaps (§8.3, §10): every box of the same snippets may list sites where the main flow
+  -- breaks off; each is a badge with its reason. They come after the calls, so a gap on
+  -- the same range as a call is drawn on top of it.
+  for _, owner in ipairs(s.stops) do
+    if owner.buf == stop.buf and (owner == stop or stops.ready(owner)) then
+      for _, part in ipairs(stops.boxes(owner)) do
+        if not part._unlocated then
+          for _, gap in ipairs(part.gaps or {}) do
+            local range = badge.range(stop.buf, gap.callsite)
+            if range then badges[#badges + 1] = { range = range, gap = gap.reason or true } end
+          end
         end
       end
     end
   end
   badge.draw_all(stop.buf, ns, badges)
-  local example = box.example or stop.example
+  local example = stop.recorded_example or box.example or stop.example
   for line, value in pairs((example or {}).values or {}) do
     local label = type(value) == "table" and value.value or value
+    if example.source == "recorded" then label = "[recorded] " .. label end
     if label:find("%S") and not label:lower():match("^%s*unchanged[%s%.!]*$") then
       vim.api.nvim_buf_set_extmark(
         stop.buf,
@@ -262,8 +281,11 @@ render = function(jump)
   end
 end
 
+local function cli_path()
+  return s.cli or (vim.fn.stdpath("config") .. "/local-plugins/code-tour.nvim/bin/code-tour")
+end
 local function command(action)
-  local cli = s.cli or (vim.fn.stdpath("config") .. "/local-plugins/code-tour.nvim/bin/code-tour")
+  local cli = cli_path()
   return vim.fn.shellescape(cli)
     .. " --"
     .. action
@@ -335,6 +357,7 @@ local function activate(data, opts, root, append, review, base)
     s.id = vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
     s.stops, s.pending, s.questions, s.frames, s.walk_index, s.zoom = {}, {}, {}, {}, nil, nil
     s.stop, s.box = 1, 1
+    s.ast = nil
   end
   clear_intent()
   s.frames = {}
@@ -958,9 +981,542 @@ end
 function M.graph()
   assert(#s.stops > 0, "Open a tour first")
   local graph = build_graph()
+  if s.ast then
+    s.ast:apply_edge_notes()
+    graph.tour, graph.symbol_graph = require("code-tour.ast.codegraph").tour(s.ast)
+  end
   local path = require("code-tour.graph").write(graph, sidecar("graph"))
   return { path = path, nodes = #graph.nodes, links = #graph.links }
 end
+
+-- Write the project's symbol graph (SPEC-ast-graph §15) and return its path.
+function M.code_graph(opts)
+  return require("code-tour.ast").code_graph(opts)
+end
+
+-- The outline of an AST-backed tour, without opening it (SPEC-ast-graph §9.1, --dry-run).
+function M.ast_outline(request)
+  request = request or {}
+  return require("code-tour.ast").outline(request.entries, request)
+end
+
+-- AST-backed tours (SPEC-ast-graph phase 3) ------------------------------------------
+-- s.ast is the live tour (ast/live.lua): the L3 state the stops are projected from.
+-- Boxes carry `anchor` ("n1", "n1.r2") and `address`; fills, `ad` on lazy sites,
+-- selections and detail changes go through it and update the stops in place.
+
+local function ast_ctx()
+  return { token = s.id, cli = cli_path(), servername = vim.v.servername, root = s.root }
+end
+
+-- Test examples are optional children of the symbol's overview. They have no call badge.
+local function ast_examples(live, data)
+  if not require("code-tour.ast").options.examples.tests then return end
+  local examples = require("code-tour.ast.examples")
+  local extra, offered = {}, {}
+  for _, stop in ipairs(data) do
+    local sn = stop.ast and not stop.lazy and live.snippets[stop.anchor]
+    if sn then
+      local test = examples.tests(live.idx, { sn.symbol })[1]
+      if test then
+        local input = examples.snippet(test)
+        local why = input.why
+        input.why = nil
+        local example = stops.normalize({ input }, live.root)[1]
+        example.why = why
+        example._parent_stop, example._parent_box = stop, stop
+        stop.test_example = example
+        extra[#extra + 1] = example
+        offered[sn.n] = { kind = "example", why = why, test = test }
+      end
+    end
+  end
+  if next(offered) then live.tour.examples = offered end
+  vim.list_extend(data, extra)
+end
+
+-- Refresh every AST box from the live tour: notes, gists, writing marks and Q&A
+-- threads. Boxes re-render in place; the reader is never moved (§9.4).
+local function ast_refresh()
+  local live = s.ast
+  if not live then
+    return
+  end
+  live:apply_edge_notes()
+  local recordings = require("code-tour.ast.recordings")
+  local record = live.recorded
+  if record and not recordings.valid(live, record) then record = nil end
+  local records = {}
+  for _, stop in ipairs(s.stops) do
+    local parent = stop.caller and live.snippets[stop.caller]
+    for _, site in ipairs(parent and parent.sites or {}) do
+      if site.site == stop.site and site.target == stop.target then stop.why = site.why; break end
+    end
+    if stop.ast and not stop.lazy then
+      if not record and stop.test_example then
+        local test = stop.test_example.example.test
+        if records[test] == nil then records[test] = recordings.lookup(live, { id = test }) or false end
+        if records[test] then record = records[test] end
+      end
+    end
+  end
+  for _, stop in ipairs(s.stops) do
+    if stop.ast and not stop.lazy then
+      local sn = live.snippets[stop.anchor]
+      stop.recorded_example = sn and record and not live:changed(sn) and recordings.values(sn, record) or nil
+      for _, box in ipairs(stops.boxes(stop)) do
+        local sn, region, rest = live:resolve_anchor(box.anchor or "")
+        if sn and not rest then
+          local pres = live:presentation(sn, region)
+          box.note, box.gist, box.writing, box.level_shown = pres.note, pres.gist, pres.writing, pres.level_shown
+          box.thread = live:thread(sn, region)
+          box.example = pres.example
+        end
+      end
+    end
+  end
+end
+
+local function ast_find(pred)
+  for i, stop in ipairs(s.stops) do
+    for k, box in ipairs(stops.boxes(stop)) do
+      if pred(stop, box) then
+        return i, k
+      end
+    end
+  end
+end
+
+-- Where the reader is, in terms that survive a re-projection: the box's region address
+-- and first line, its snippet, and the snippets above it.
+local function ast_here()
+  local stop, box = current()
+  if not stop then
+    return nil
+  end
+  local chain = {}
+  local p = stop._parent_stop
+  while p do
+    chain[#chain + 1] = p.anchor
+    p = p._parent_stop
+  end
+  local frames = {}
+  for _, f in ipairs(s.frames or {}) do
+    frames[#frames + 1] = { call = f.call.anchor, stop = f.stop.anchor, box = f.box and f.box.address }
+  end
+  return { anchor = box.anchor, address = box.address, line = box.start, n = stop.anchor, chain = chain,
+    frames = frames }
+end
+
+-- Put the reader back on the same region, else the smallest box of the same snippet
+-- holding the old first line, else that snippet, else the nearest snippet above it.
+local function ast_restore(here)
+  if not here then
+    return
+  end
+  local i, k = ast_find(function(stop, box)
+    return stop.anchor == here.n and box.address == here.address
+  end)
+  if not i then
+    local best
+    for si, stop in ipairs(s.stops) do
+      if stop.anchor == here.n then
+        for bk, box in ipairs(stops.boxes(stop)) do
+          if box.start <= here.line and box["end"] >= here.line then
+            if not best or (box["end"] - box.start) < best.size then
+              best = { i = si, k = bk, size = box["end"] - box.start }
+            end
+          end
+        end
+      end
+    end
+    if best then
+      i, k = best.i, best.k
+    end
+  end
+  for _, n in ipairs(i and {} or here.chain) do
+    i, k = ast_find(function(stop, box)
+      return stop.anchor == n and box == stop
+    end)
+    if i then
+      break
+    end
+  end
+  s.stop, s.box = i or 1, k or 1
+  -- the return stack is rebuilt by anchor; frames whose snippets left the tour are
+  -- dropped, and the walk index is recomputed
+  local frames = {}
+  for _, f in ipairs(here.frames or {}) do
+    local ci = f.call and ast_find(function(stop, box)
+      return stop.anchor == f.call and box == stop
+    end)
+    local si, sk = nil, nil
+    if f.stop then
+      si, sk = ast_find(function(stop, box)
+        return stop.anchor == f.stop and box.address == f.box
+      end)
+      si = si or ast_find(function(stop, box)
+        return stop.anchor == f.stop and box == stop
+      end)
+    end
+    if ci and si then
+      local caller = s.stops[si]
+      frames[#frames + 1] = { call = s.stops[ci], stop = caller, box = stops.boxes(caller)[sk or 1] }
+    end
+  end
+  s.frames, s.walk_index = frames, nil
+end
+
+-- Structural operations (`ad`, selections, detail changes) rebuild stops from regions and
+-- sites computed when the tour was built; after a source edit those no longer match the
+-- buffer, so they are refused until the tour is rebuilt. Returns nil, message.
+local function ast_guard()
+  local changed = s.ast:changed_snippets()
+  if #changed == 0 then
+    return true
+  end
+  local ids = {}
+  for _, sn in ipairs(changed) do
+    ids[#ids + 1] = sn.n
+  end
+  return nil, "Source changed; rebuild with code-tour ast (" .. table.concat(ids, " ") .. ")"
+end
+
+-- Review diffs (`s.review`) for freshly normalized stops.
+local function ast_review(data)
+  if s.review then
+    for _, stop in ipairs(data) do
+      if not stop.lazy then require("code-tour.review").prepare(stop, s.root, s.base) end
+    end
+  end
+  return data
+end
+
+-- Each snippet is requested once per detail; a detail change, a second `ad` on the same
+-- snippet or a refresh asks only for what was never requested (cleared by M.cancel).
+local function ast_unrequested(live, list)
+  live.requested = live.requested or {}
+  local out = {}
+  for _, sn in ipairs(list) do
+    local key = sn.n .. "@" .. live.detail
+    if not live.requested[key] then
+      live.requested[key] = true
+      out[#out + 1] = sn
+    end
+  end
+  return out
+end
+
+-- Replace a stop and its subtree with freshly normalized stops for `input`, keeping
+-- its place under its caller. Returns the new stop.
+local function ast_splice(old, input)
+  local i = assert(locate(old), "Stop no longer exists")
+  local function under(stop)
+    while stop do
+      if stop == old then
+        return true
+      end
+      stop = stop._parent_stop
+    end
+  end
+  local j = i
+  while s.stops[j + 1] and under(s.stops[j + 1]) do
+    j = j + 1
+  end
+  local data = ast_review(stops.normalize({ input }, s.root))
+  local new = data[1]
+  new._parent_stop, new._parent_box, new.callsite = old._parent_stop, old._parent_box, old.callsite
+  new.next, new.level, new.main, new.site, new.target = old.next, old.level, old.main, old.site, old.target
+  new.why = old.why
+  for _ = i, j do
+    table.remove(s.stops, i)
+  end
+  for n, stop in ipairs(data) do
+    table.insert(s.stops, i + n - 1, stop)
+  end
+  s.stops = vim.tbl_filter(function(stop) return stop.kind ~= "example" end, s.stops)
+  ast_examples(s.ast, s.stops)
+  for _, f in ipairs(s.frames or {}) do
+    if f.call == old then
+      f.call = new
+    end
+  end
+  return new
+end
+
+local function ast_deliver(prompt, label)
+  started(label)
+  deliver(prompt, "stay", function(ok, err)
+    if not ok then
+      notify("AST request delivery failed: " .. tostring(err))
+    elseif err then
+      notify(err)
+    end
+  end)
+end
+
+function M.ast_brief(id, token)
+  assert(s.ast, "Open an AST tour first (code-tour ast)")
+  assert(token == nil or token == s.id, "The tour changed")
+  return require("code-tour.ast.brief").build(s.ast, id, ast_ctx())
+end
+
+function M.know(cmd, opts)
+  return require("code-tour.ast.knowledge").run(cmd, opts)
+end
+
+local function ast_pending_list(live)
+  local list = {}
+  for _, sn in ipairs(live:pending()) do
+    list[#list + 1] = { n = sn.n, title = sn.label, tier = sn.tier, command = live:fill_command(cli_path(), vim.v.servername, s.id, sn.n) }
+  end
+  return list
+end
+
+-- §9.1: build the tour, show the whole skeleton at once (fresh notes complete, every
+-- other box "Being written…"), return the outline. request: { entries, root?, detail?,
+-- through?, origin?, cli?, standalone?, send? (deliver the outline to the agent, as
+-- :CodeTourAst does), cache_dir? }.
+function M.ast_tour(request)
+  request = request or {}
+  local ast = require("code-tour.ast")
+  if not ast.options.enabled then
+    return { fallback = true, reason = "ast disabled" }
+  end
+  if request.auto and not request.recipe and (not request.entries or #request.entries == 0) then
+    return ast.outline({}, request)
+  end
+  local live, err = require("code-tour.ast.live").new(request)
+  if not live then
+    local fallback = ast.fallback_reason(err)
+    if fallback then return { fallback = true, reason = fallback } end
+    error(err, 0)
+  end
+  local result = M.show(live:stops(), { root = live.root, origin = request.origin, cli = request.cli,
+    standalone = request.standalone })
+  s.ast = live
+  ast_examples(live, s.stops)
+  live:remember()
+  ast_refresh()
+  render(false)
+  local ctx = ast_ctx()
+  result.tour = s.id
+  result.detail = live.detail
+  result.outline = live:outline(ctx)
+  result.pending = ast_pending_list(live)
+  if #result.pending == 0 then
+    result.pending = nil
+  end
+  local stale_boxes = {}
+  for _, box in ipairs(live:stale()) do
+    stale_boxes[#stale_boxes + 1] = box.n .. "." .. box.box .. " (" .. box.reason .. ")"
+  end
+  if #stale_boxes > 0 then notify("Stale explanations: " .. table.concat(stale_boxes, ", ")) end
+  local pending = ast_unrequested(live, live:pending())
+  local prompts = require("code-tour.ast.prompts")
+  if request.send and #pending > 0 then
+    if request.recipe then
+      ast_deliver(prompts.write(live, ctx, pending), "Requested missing explanations")
+    else
+      ast_deliver(prompts.tour(live, ctx), "Sent the tour outline to the agent")
+    end
+  end
+  return result
+end
+
+-- A fill for an AST snippet (§9.3–9.4): notes go to the store and boxes re-render in
+-- place; the reader is never moved.
+local function ast_fill(id, input, opts)
+  local result = s.ast:fill(id, input, opts or {})
+  ast_refresh()
+  if not typing() then
+    render(false)
+  end
+  result.navigate = false
+  return result
+end
+
+-- `ad` on a lazy site (§9.5): build the target's snippet and insert it in place of the
+-- lazy call, enter it, and ask the agent for its boxes unless the store has them all.
+local function ast_expand(call)
+  local ok, why = ast_guard()
+  if not ok then
+    notify(why)
+    return nil
+  end
+  local parent, pbox = call._parent_stop, call._parent_box
+  local sn, input, needs = s.ast:expand(call.anchor)
+  local new = ast_splice(call, input)
+  ast_refresh()
+  enter_call(new, parent, pbox)
+  reset_pages()
+  M.recenter()
+  if needs and #ast_unrequested(s.ast, { sn }) == 0 then
+    started("Explanation already in progress: " .. sn.label)
+  elseif needs then
+    local caller = parent and {
+      n = parent.anchor, label = parent.title, box = pbox and pbox.anchor and pbox.anchor:match("%.(.+)$") or "overview",
+      note = pbox and pbox.note or "",
+    }
+    ast_deliver(require("code-tour.ast.prompts").snippet(s.ast, ast_ctx(), sn, caller),
+      "Requested explanation: " .. sn.label)
+  else
+    started("Opening explanation: " .. sn.label)
+  end
+  return sn.n
+end
+
+-- `ae`/`aE` on code inside an AST snippet (§7, §9.5): the selection maps to the
+-- smallest region containing it, or a synthetic one; the reply is a fill for it.
+-- Returns id, prompt, or nil when the selection is not inside an AST snippet.
+local function ast_explain(selection, context, action)
+  local parent = require("code-tour.selection").placement(s, selection)
+  if not (parent and parent.ast and parent.anchor and not parent.lazy) then
+    return nil
+  end
+  local ok, why = ast_guard()
+  if not ok then
+    notify(why)
+    return false
+  end
+  local here = ast_here()
+  local range = selection.byte_range
+  if not range then
+    local last = vim.api.nvim_buf_get_lines(selection.buf, selection["end"] - 1, selection["end"], false)[1] or ""
+    range = { start = { selection.start - 1, 0 }, ["end"] = { selection["end"] - 1, #last } }
+  end
+  local res = s.ast:select(parent.anchor, range)
+  if res.stop then
+    ast_splice(parent, res.stop)
+    ast_refresh()
+    ast_restore(here)
+  end
+  local boxes = {}
+  for _, id in ipairs(res.boxes) do
+    local _, region = s.ast:resolve_anchor(res.sn.n .. "." .. id)
+    if s.ast:status(res.sn, region) ~= "fresh" then boxes[#boxes + 1] = id end
+  end
+  if #boxes == 0 then
+    render(false)
+    return res.sn.n
+  end
+  local prompt = require("code-tour.ast.prompts").explain(s.ast, ast_ctx(), {
+    sn = res.sn, boxes = boxes, synthetic = res.synthetic, context = context, text = selection.text,
+  })
+  started(("Generating explanation for %s %s…"):format(res.sn.n, res.boxes[1]))
+  deliver(prompt, action or "stay", function(ok, err)
+    if not ok or err then
+      notify(err)
+    end
+  end)
+  render(false)
+  return res.sn.n, prompt
+end
+
+-- Replace the projection while keeping the reader's position and unrelated stops.
+local function ast_reproject(live, data, here, label, reason)
+  ast_examples(live, data)
+  for _, stop in ipairs(s.stops) do
+    if not stop.ast and stop.kind ~= "example" and not (stop._parent_stop and stop._parent_stop.ast) then
+      data[#data + 1] = stop
+    end
+  end
+  s.ast = live
+  s.stops = ast_review(data)
+  for id, request in pairs(s.pending) do
+    local target = request.placeholder or request.stop
+    if target and not locate(target) then s.pending[id] = nil end
+  end
+  live:remember()
+  ast_refresh()
+  ast_restore(here)
+  reset_pages()
+  render(true)
+  local write = ast_unrequested(live, live:pending())
+  if #write > 0 then
+    ast_deliver(require("code-tour.ast.prompts").write(live, ast_ctx(), write, reason or label),
+      ("%s · %d snippet%s to write"):format(label, #write, #write == 1 and "" or "s"))
+  else
+    started(label)
+  end
+  return { detail = live.detail, tour = s.id, pending = ast_pending_list(live), outline = live:outline(ast_ctx()) }
+end
+
+function M.ast_detail(detail)
+  local live = assert(s.ast, "Open an AST tour first (code-tour ast)")
+  assert(ast_guard())
+  local here, before = ast_here(), live.detail
+  local res = live:set_detail(detail)
+  if res.request == false then
+    return { detail = detail, tour = s.id, pending = ast_pending_list(live), outline = live:outline(ast_ctx()) }
+  end
+  live.recorded = nil
+  local ok, data = pcall(stops.normalize, live:stops(), s.root)
+  if not ok then
+    live:set_detail(before)
+    error(data, 0)
+  end
+  return ast_reproject(live, data, here, "Detail: " .. detail, "detail changed to " .. detail)
+end
+
+function M.ast_adjust(ops)
+  ops = ops or {}
+  local live = assert(s.ast, "Open an AST tour first (code-tour ast)")
+  local overrides = ops.overrides or {}
+  if #overrides == 0 then
+    assert(ops.detail, "Pass --detail or an override")
+    return M.ast_detail(ops.detail)
+  end
+  assert(ast_guard())
+  local normalized, err = require("code-tour.ast.overrides").normalize(live.prep.rt, live:all(), overrides, live.detail)
+  assert(normalized, err)
+  local recipe = vim.deepcopy(live.recipe)
+  recipe.overrides = vim.list_extend(recipe.overrides or {}, normalized)
+  recipe.detail = ops.detail or live.detail
+  local request = { root = live.root, recipe = recipe, store = live.store, cache_dir = live.idx.cache_dir }
+  local rebuilt, reason = require("code-tour.ast.live").new(request)
+  assert(rebuilt, reason)
+  -- Preserve snippet IDs previously sent to a writer.
+  rebuilt.ids, rebuilt.next_n = vim.deepcopy(live.ids), live.next_n
+  rebuilt.snippets, rebuilt.built = {}, {}
+  rebuilt:assemble()
+  local data = stops.normalize(rebuilt:stops(), s.root)
+  local here = ast_here()
+  s.id = vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
+  s.questions, s.tour_file = {}, nil
+  return ast_reproject(rebuilt, data, here, "Tour adjusted")
+end
+
+function M.store_prune(opts)
+  local ast = require("code-tour.ast")
+  return require("code-tour.ast.store").new(ast.index(opts), ast.options):prune()
+end
+
+function M.ast_history(id)
+  local root = s.root or vim.fn.getcwd()
+  local ast = require("code-tour.ast")
+  local store = require("code-tour.ast.store").new(ast.index({ root = root }), ast.options)
+  local function open(recipe)
+    local ok, result = pcall(M.ast_tour, { root = root, recipe = recipe, send = true, origin = s.origin })
+    if not ok then notify(result)
+    elseif result.fallback then notify(result.reason) end
+    return ok and result or nil
+  end
+  if id and id ~= "" then return open(assert(store:recipe(id), "Unknown AST tour " .. id)) end
+  local recipes = store:recipes()
+  if #recipes == 0 then return notify("No AST tour history in this repository") end
+  vim.ui.select(recipes, {
+    prompt = "Open an AST tour",
+    format_item = function(recipe)
+      return (recipe.label or (#recipe.entries > 0 and table.concat(recipe.entries, ", ") or "Automatic entries"))
+        .. " · " .. recipe.detail
+    end,
+  }, function(recipe)
+    if recipe then open(recipe) end
+  end)
+end
+
+M._ast = { refresh = ast_refresh, splice = ast_splice, here = ast_here, restore = ast_restore }
 
 -- The tour as an outline in a floating window or a tab; <CR> jumps to the snippet.
 function M.tree(mode)
@@ -1086,8 +1642,20 @@ function M.ask(question, action, selected)
   local prompt = ("[code-tour question] tour: %s\nstop %s · %s:%d-%d%s\n%sQuestion: %s\nReply: %s")
     :format(tour_path(), id, stop.file, first, last, selected and " (selected lines)" or "",
       stale and (stale .. "\n") or "", question, command("answer " .. id))
+  if s.ast and box.ast then
+    local sn, region = s.ast:resolve_anchor(box.anchor)
+    local found = sn and s.ast:lookup(sn, region)
+    if sn then
+      local tier, suggested = require("code-tour.ast.tiers").writer(sn, found and found.model)
+      if suggested then prompt = prompt .. ("\nWriter tier: %s (%s)"):format(tier, suggested) end
+    end
+  end
   local turn = { question = question, box_id = id }
   box.thread[#box.thread + 1] = turn
+  if s.ast and box.ast then
+    local sn, region = s.ast:resolve_anchor(box.anchor)
+    if sn then s.ast:save_turn(sn, region, turn) end
+  end
   s.questions[id] = s.questions[id] or {}
   s.questions[id][#s.questions[id] + 1] = { box = box, stop = stop, turn = turn }
   started(action == "add" and "Sending question draft to agent…" or "Sending question to agent…")
@@ -1129,10 +1697,76 @@ function M.answer(text, id)
   end
   assert(target and locate(target.stop, target.box), "No pending question for box " .. tostring(id))
   target.turn.answer, target.turn.error = text, nil
+  if s.ast and target.box.ast then
+    local sn, region = s.ast:resolve_anchor(target.box.anchor)
+    if sn then s.ast:save_turn(sn, region, target.turn) end
+  end
   if not typing() then
     render(false)
   end
   return { answered = id }
+end
+
+function M.ast_record()
+  local live = assert(s.ast, "Open an AST tour first")
+  local stop = current()
+  assert(stop and stop.test_example, "This snippet has no matching project test")
+  local input = require("code-tour.ast.examples").tests(live.idx, { live.snippets[stop.anchor].symbol })[1]
+  require("code-tour.ast.recordings").start(live, input, {}, function(record, err)
+    if not record then
+      notify(err .. ". The test example is still available.")
+      return
+    end
+    if s.ast == live then
+      live.recorded = record
+      ast_refresh()
+      render(false)
+      notify("Recorded example from " .. input.label)
+    end
+  end)
+end
+
+function M.ast_scenario(opts)
+  local live = assert(s.ast, "Open an AST tour first")
+  local id, request = opts.box, nil
+  for _, candidate in ipairs(s.questions[id] or {}) do
+    if not candidate.turn.answer then request = candidate; break end
+  end
+  if not request and type(id) == "string" and id:match("^n%d+") then
+    for key, queue in pairs(s.questions) do
+      for _, candidate in ipairs(queue) do
+        if not candidate.turn.answer and candidate.box.anchor == id then id, request = key, candidate; break end
+      end
+      if request then break end
+    end
+  end
+  assert(request and request.box.ast and locate(request.stop, request.box), "No pending AST question for that box")
+  assert(type(opts.source) == "string" and opts.source:find("%S"), "Scenario source is empty")
+  assert(not request.recording, "This question already has a scenario running")
+  local sn, region = live:resolve_anchor(request.box.anchor)
+  local token = s.id
+  request.recording = true
+  require("code-tour.ast.recordings").start(live, { id = sn.symbol, file = sn.file }, opts, function(record, err)
+    request.recording = nil
+    if s.id ~= token or s.ast ~= live or request.turn.answer or not locate(request.stop, request.box) then return end
+    if not record then
+      request.turn.error = err
+      live:save_turn(sn, region, request.turn)
+      ast_deliver("[code-tour example] Scenario unavailable for box " .. id .. " (" .. err
+        .. "). Reply with an illustrative example labelled generated. " .. command("answer " .. id),
+        "Requested a generated example")
+      return
+    end
+    local addresses = vim.tbl_keys(record.values)
+    table.sort(addresses)
+    local lines = { "Executed example", "", "```java", opts.source, "```", "" }
+    for _, address in ipairs(addresses) do
+      lines[#lines + 1] = "- " .. address .. " — " .. record.values[address]:gsub("\n", " ")
+    end
+    request.turn.source = "executed"
+    M.answer(table.concat(lines, "\n"), id)
+  end)
+  return { box = id, requested = true }
 end
 
 
@@ -1143,6 +1777,11 @@ function M.explain_range(selection, context, action)
     vim.api.nvim_buf_is_valid(selection.buf) and vim.api.nvim_buf_get_changedtick(selection.buf) == selection.tick,
     "The selected code changed; select it again"
   )
+  if s.ast then
+    local ast_id, ast_prompt = ast_explain(selection, context, action)
+    if ast_id == false then return end
+    if ast_id then return ast_id, ast_prompt end
+  end
   local parent, anchor, position = require("code-tour.selection").placement(s, selection)
   local stop, box = current()
   local id = request_id()
@@ -1449,6 +2088,7 @@ function M.expand_call(call)
     call = call or calls[1]
   end
   if not locate(call) then return end
+  if s.ast and call.ast and call.lazy then return ast_expand(call) end
   -- Say why a call was left unexpanded, so opening it is an informed choice.
   if call.why and not stops.ready(call) then
     notify(("Skipped earlier: %s"):format(call.why), vim.log.levels.INFO)
@@ -1523,6 +2163,9 @@ end
 
 function M.fill(id, input, opts)
   opts = opts or {}
+  if s.ast and type(id) == "string" and id:match("^n%d+$") and not s.pending[id] then
+    return ast_fill(id, input, opts)
+  end
   local request = assert(s.pending[id], "Unknown or completed explain request " .. tostring(id))
   -- A streamed snippet is written where its placeholder is, so the route never changes behind the reader.
   assert(not (request.stream and (opts.after or opts.into)), "Streamed snippets are filled in place: omit --after/--into")
@@ -1783,6 +2426,7 @@ function M.cancel()
     end
   end
   s.pending, s.questions, s.arrival, s.awaiting, s.lookup = {}, {}, nil, nil, nil
+  if s.ast then s.ast.requested = {} end
   s.id = vim.fn.sha256(tostring(vim.uv.hrtime()) .. vim.fn.getpid()):sub(1, 16)
 end
 function M.state()
@@ -1824,6 +2468,7 @@ function M.setup(opts)
     assert(type(value) == "number" and value > 0 and value == math.floor(value), name .. " must be a positive integer")
   end
   assert(type(s.opts.saved_reuse_unverified) == "boolean", "saved_reuse_unverified must be a boolean")
+  require("code-tour.ast").setup(s.opts.ast)
   require("code-tour.instance").register()
   highlights()
   badge.configure(s.opts.badge)
@@ -1877,6 +2522,56 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("CodeTourLoad", function(args)
     M.load(args.args ~= "" and args.args or nil)
   end, { nargs = "?", complete = "file", force = true })
+  vim.api.nvim_create_user_command("CodeTourAst", function(args)
+    local words = vim.split(vim.trim(args.args), "%s+", { trimempty = true })
+    local detail
+    if #words > 0 and require("code-tour.ast.live").details[words[#words]] then
+      detail = table.remove(words)
+    end
+    if #words == 1 and words[1] == "--auto" then
+      local result = M.ast_outline({ auto = true, root = vim.fn.getcwd() })
+      if result.fallback then notify(result.reason); return end
+      if #result.candidates == 0 then notify("No AST tour entries found"); return end
+      vim.ui.select(result.candidates, { prompt = "Choose a tour entry",
+        format_item = function(candidate) return candidate.label .. " · " .. candidate.file end,
+      }, function(candidate)
+        if candidate then M.ast_tour({ entries = { candidate.symbol }, detail = detail,
+          root = result.root, send = true, origin = s.origin }) end
+      end)
+      return
+    end
+    if #words == 0 then
+      local entry = vim.fn.expand("%:p") .. ":" .. vim.fn.line(".")
+      words = { entry }
+    end
+    local ok, result = pcall(M.ast_tour, { entries = words, detail = detail, root = vim.fn.getcwd(), send = true,
+      origin = s.origin })
+    if not ok then
+      notify(result)
+    elseif result.fallback then
+      notify("No AST tour: " .. tostring(result.reason))
+    end
+  end, { nargs = "*", force = true })
+  vim.api.nvim_create_user_command("CodeTourCodeGraph", function()
+    local ok, result = pcall(M.code_graph, { root = s.root or vim.fn.getcwd() })
+    notify(ok and ("Code graph: " .. result.path) or result)
+  end, { force = true })
+  vim.api.nvim_create_user_command("CodeTourHistory", function(args)
+    local ok, err = pcall(M.ast_history, args.args)
+    if not ok then notify(err) end
+  end, { nargs = "?", force = true })
+  vim.api.nvim_create_user_command("CodeTourRecord", function()
+    local ok, err = pcall(M.ast_record)
+    if not ok then notify(err) end
+  end, { force = true })
+  vim.api.nvim_create_user_command("CodeTourExample", function()
+    local stop = current()
+    if stop and stop.test_example then M.expand_call(stop.test_example) else notify("No test example") end
+  end, { force = true })
+  vim.api.nvim_create_user_command("CodeTourDetail", function(args)
+    local ok, err = pcall(M.ast_detail, args.args)
+    if not ok then notify(err) end
+  end, { nargs = 1, complete = function() return { "overview", "normal", "detailed", "exhaustive" } end, force = true })
   vim.api.nvim_create_user_command("CodeTourZoomOut", function() M.zoom(-1) end, { force = true })
   vim.api.nvim_create_user_command("CodeTourZoomIn", function() M.zoom(1) end, { force = true })
   vim.api.nvim_create_user_command("CodeTourTree", function(args)
@@ -1900,6 +2595,14 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufEnter" }, {
     group = group,
     callback = function()
+      if s.ast and not s.saved then
+        -- a snippet whose source changed withholds its notes until the tour is rebuilt
+        M._ast.refresh()
+        local active = current()
+        if active and s.win and vim.api.nvim_win_is_valid(s.win) and vim.api.nvim_win_get_buf(s.win) == active.buf then
+          render(false)
+        end
+      end
       if s.saved then
         saved.revalidate(s)
         warn_stale()

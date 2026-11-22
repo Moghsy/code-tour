@@ -5,6 +5,35 @@ local M = {}
 
 local view -- { win, buf, tab? } while open
 local MAX_TITLE = 56
+local GIST_LINES = 3
+
+-- A gist folded onto at most GIST_LINES rows of MAX_TITLE cells, on word boundaries; the
+-- last row ends in "…" when the gist runs longer.
+local function wrap(text)
+  local rows, row = {}, ""
+  for word in text:gsub("%s+", " "):gmatch("%S+") do
+    local candidate = row == "" and word or row .. " " .. word
+    if vim.fn.strdisplaywidth(candidate) <= MAX_TITLE then
+      row = candidate
+    else
+      if row ~= "" then rows[#rows + 1] = row end
+      row = word
+      if #rows == GIST_LINES then break end
+    end
+  end
+  if #rows < GIST_LINES and row ~= "" then
+    rows[#rows + 1], row = row, ""
+  end
+  for i, r in ipairs(rows) do
+    if vim.fn.strdisplaywidth(r) > MAX_TITLE then rows[i] = vim.fn.strcharpart(r, 0, MAX_TITLE - 1) .. "…" end
+  end
+  if row ~= "" then
+    local last = rows[#rows]
+    if vim.fn.strdisplaywidth(last) > MAX_TITLE - 1 then last = vim.fn.strcharpart(last, 0, MAX_TITLE - 1) end
+    rows[#rows] = last .. "…"
+  end
+  return rows
+end
 
 local function width(text)
   return vim.fn.strdisplaywidth(text)
@@ -32,7 +61,9 @@ local function indent(item, prefix, spans)
   return out
 end
 
--- One snippet as a rounded box. The bottom edge gets a tee when branches hang below it.
+-- One snippet as a rounded box: title, the snippet's gist when one is written (AST tours,
+-- SPEC-ast-graph §10), then its location. The bottom edge gets a tee when branches hang
+-- below it.
 local function box(node, title, mark, current, has_children)
   title = (mark ~= "" and mark .. " " or "") .. title
   if width(title) > MAX_TITLE then
@@ -43,7 +74,9 @@ local function box(node, title, mark, current, has_children)
     if b.role == "part" then parts = parts + 1 end
   end
   local meta = where(node) .. (parts > 0 and ("  ·  %d parts"):format(parts) or "")
+  local gist = node.gist and node.gist:find("%S") and wrap(node.gist) or {}
   local inner = math.max(width(title), width(meta), 6) + 2
+  for _, text in ipairs(gist) do inner = math.max(inner, width(text) + 2) end
   local edge = current and "CodeTourTreeCurrent" or "CodeTourTreeBorder"
   local function row(text, group)
     local pad = string.rep(" ", inner - 1 - width(text))
@@ -56,12 +89,14 @@ local function box(node, title, mark, current, has_children)
   if has_children then
     bottom = "╰─┬" .. string.rep("─", inner - 2) .. "╯"
   end
-  return {
+  local out = {
     line("╭" .. string.rep("─", inner) .. "╮", node, { { 0, -1, edge } }),
     row(title, current and "CodeTourTreeCurrent" or "CodeTourTreeTitle"),
-    row(meta, "CodeTourTreeLocation"),
-    line(bottom, node, { { 0, -1, edge } }),
   }
+  for _, text in ipairs(gist) do out[#out + 1] = row(text, "CodeTourTreeGist") end
+  out[#out + 1] = row(meta, "CodeTourTreeLocation")
+  out[#out + 1] = line(bottom, node, { { 0, -1, edge } })
+  return out
 end
 
 -- Pure part: graph -> lines, line -> node, highlight spans, line of the current node.
@@ -159,6 +194,7 @@ local function highlights()
   for name, link in pairs({
     CodeTourTreeCurrent = "CursorLine", CodeTourTreeTitle = "Title", CodeTourTreeNext = "DiagnosticWarn",
     CodeTourTreeOptional = "DiagnosticError", CodeTourTreeLocation = "Comment", CodeTourTreeBorder = "FloatBorder",
+    CodeTourTreeGist = "Normal",
   }) do
     vim.api.nvim_set_hl(0, name, { default = true, link = link })
   end

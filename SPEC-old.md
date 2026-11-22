@@ -216,9 +216,22 @@ nvim --clean --headless -l tests/context.lua
 nvim --clean --headless -i NONE -l tests/source.lua
 nvim --clean --headless -i NONE -l tests/library.lua
 nvim --clean --headless -i NONE -l tests/saved.lua
+nvim --clean --headless -l tests/ast_extract.lua
+nvim --clean --headless -l tests/ast_resolve.lua
+nvim --clean --headless -l tests/ast_regions.lua
+nvim --clean --headless -l tests/ast_route.lua
+nvim --clean --headless -l tests/ast_project.lua
+nvim --clean --headless -l tests/ast_fill.lua
+nvim --clean --headless -l tests/ast_stream.lua
+nvim --clean --headless -l tests/ast_expand.lua
+nvim --clean --headless -l tests/ast_detail.lua
+nvim --clean --headless -l tests/ast_render.lua
+nvim --clean --headless -l tests/ast_live.lua
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_library_cli.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cli.py
 ```
+
+The `ast_*` tests, `CodeGraphTests`, `AstDryRunTests` and `AstTourTests` in `test_cli.py` copy `tests/fixtures/java/` into a temporary git repository and use an isolated parse cache. Without the Java parser they print a verification gap; without graphify the merge check is skipped (`GRAPHIFY_PYTHON` names graphify's interpreter when it is not found from the `graphify` launcher).
 
 The scroll test uses the local Lazy installation of Snacks. `page_lines = 18` controls the upper page budget and `smooth_scroll = false` skips animated tour navigation. Animation timing remains under Snacks configuration.
 
@@ -227,6 +240,12 @@ The saved tests use isolated temporary data/state/cache roots and stub agent del
 ## Tour graph
 
 `:CodeTourGraph` (or `code-tour graph`) writes the active tour as NetworkX node-link JSON, the shape graphify uses, in `$TMPDIR/code-tour-UID/`. Nodes are snippets (identical ranges merge, boxes are attributes with their stale status); links are `next` (reading route), `optional` (red callees) and `overlaps`. Stale-explanation reports are computed from this graph. It is a projection of the tour; the saved tour format is unchanged.
+
+`code-tour codegraph [--project DIR] [--out PATH] [--pane P]` writes the project's symbol graph (SPEC-ast-graph.md §15, phase 1 of that proposal): Java types, methods, constructors and fields as nodes; `contains`, `method`, `field`, `inherits`, `implements`, `imports`, `references` and `overrides` links; and one `calls` link per call site, keyed by site id, with its badge text, columns, confidence and `via`. Without `--pane` it runs headless Neovim (`CODE_TOUR_NVIM` overrides the binary); with one, the editor's unsaved buffers count. The default output is `$TMPDIR/code-tour-UID/codegraph.json`; the RPC is `require("code-tour").code_graph({root, out})`. Parsed facts are cached by git blob SHA under `stdpath("cache")/code-tour/ast/`.
+
+`code-tour ast ENTRY… --dry-run [--detail D] [--through SYMBOL]… [--json] [--project DIR] [--pane P]` (phase 2 of SPEC-ast-graph.md) builds an AST-backed tour for Java entries (`Type#method`, `Type#method(Params)`, `Type.method`, a type, or `path:line`) and prints its outline (§9.2) without opening anything: each snippet with its regions (§7) and their sites by mode (`walk`, `optional`, `lazy`, `ref`, `accessor`, `unresolved`), plus `sink:`, `gap:` and `fork:` lines for the main flow (§8.3). `--json` prints the derived tour (§3.6) instead. The RPC is `require("code-tour").ast_outline({entries, root, detail, through})`; options `ast.detail`, `ast.rating_bands`, `ast.cutoffs` and `ast.main_cap` apply.
+
+Without `--dry-run` (phase 3), `code-tour ast ENTRY… [--detail D] [--through S] [--pane P]` opens the tour in the editor (RPC `ast_tour`) and prints the outline; its header carries the tour token and the fill command. The whole skeleton appears at once: each snippet is a stop (`anchor = "n1"`), its regions nested parts (`n1.r2`), main-flow calls gold `next` calls with `level` = effective rating and a `CodeTourMainCall` ★ badge, other routed callees optional calls, lazy sites lazy calls with their reason, and main-flow gaps a `CodeTourGap` badge with the reason. Boxes without a fresh note read "Being written…". `code-tour --fill nK --tour T --pane P [--detail D] [--model M]` takes Markdown on stdin, one `## overview` / `## rK` / `## nK rK` section per box (first paragraph the gist, the rest the body), or JSON `{"rK": {"gist", "body"}}`; boxes re-render in place and the reader is not moved; a snippet whose source changed is refused. `ad` on a lazy AST call builds the target's snippet in place, enters it and sends `[code-tour ast] nK …` unless every box is already written; `ae`/`aE` inside an AST snippet maps the selection to a region (splitting a leaf region when the selection covers only some of its statements) and sends `[code-tour explain]` for it. `:CodeTourDetail {detail}` or `code-tour adjust --tour T --detail D` changes the detail of the live tour without re-rating: extras enter or leave, boxes refine or coarsen, each box shows its body for the new level or the nearest one (marked with its level), and only boxes never written at that level are requested. `:CodeTourAst [entry] [detail]` builds a tour from the editor (default entry: the cursor's method) and sends the outline to the agent. `:CodeTourTree` shows snippet gists once they exist. Notes are kept in memory for the editor session until the note store (phase 4) exists.
 
 `:CodeTourTree [float|tab]` (`<leader>at`) draws the graph in the terminal (`lua/code-tour/tree.lua`): every snippet is a box with its title, `file:lines` and part count. Top-level snippets run down the left, joined by `▼`, and a snippet's calls branch off it as indented boxes (`├─▶` gold route, `┄○` optional). `●` marks the snippet you are in, `…` one not explained yet, and `↺` a snippet already drawn, so recursion cannot loop. `<CR>` on any box jumps to that snippet (a call opens like `ad`), `q` or `<Esc>` closes, and pressing the key again toggles it. It reads the graph and never changes the tour.
 

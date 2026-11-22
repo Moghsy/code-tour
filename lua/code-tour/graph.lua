@@ -38,6 +38,8 @@ function M.build(state, id_of, tour)
       node.lazy = node.lazy and stop.lazy or false
       node.root = node.root or not stop._parent_stop
       node.pending = node.pending and stop.stream == true
+      -- An AST snippet's overview gist, once written (SPEC-ast-graph §10); the tree shows it.
+      node.gist = node.gist or stop.gist
       node.stops[#node.stops + 1] = i
       stop_node[stop] = node
       for k, box in ipairs(stops.boxes(stop)) do
@@ -46,6 +48,8 @@ function M.build(state, id_of, tour)
           id = id_of(stop, box),
           stop = i,
           role = k == 1 and "overview" or "part",
+          address = box.address,
+          source = box.source or (box.ast and "ast" or "agent"),
           -- Parts form a tree inside the snippet: the parent is the box this one refines.
           parent = k > 1 and id_of(stop, box._parent_part or stop) or nil,
           depth = k > 1 and (box._depth or 1) or 0,

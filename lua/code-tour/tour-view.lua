@@ -177,6 +177,10 @@ function M.build(state, stop, box)
   local has_qa = ready and #box.thread > 0
   local calls = stops.calls_in(state.stops, stop, box)
   local hints = footer_hint(width, #calls > 0, stop._parent_stop)
+  if box == stop and stop.test_example then
+    local example = (hints and (hints .. " · ") or "") .. ":CodeTourExample"
+    if vim.fn.strdisplaywidth(example) <= width - 6 then hints = example end
+  end
   local overhead = 4 + (has_qa and 2 or 0)
   local budget = math.max(1, math.min(state.opts.page_lines or 18, height - minimum_code - overhead))
   local note_capacity = has_qa and math.max(1, math.floor(budget / 2)) or budget

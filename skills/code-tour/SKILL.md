@@ -1,6 +1,6 @@
 ---
 name: code-tour
-description: Create interactive Neovim code tours and answer code-tour question, explain, or refine prompts in the originating Claude or Codex conversation.
+description: Create interactive Neovim code tours and answer code-tour question, explain, or refine prompts in the originating Claude or Codex conversation. Use the code-tour knowledge commands for questions about a codebase when its repository has a .code-tour/ directory.
 ---
 
 Use the code-tour CLI to present code, review changes, or answer an existing tour request. Run `python3 <skill-dir>/scripts/code-tour.py` (called `code-tour` below). It sends stops directly to Neovim over RPC (under Herdr it also focuses the editor's pane). It does not edit source.
@@ -33,6 +33,14 @@ Only prepared overviews, parts and nested callees/navigation are retained. Q&A, 
 `[code-tour saved regeneration batch]` carries several boxes under the same contract. Explain each `## Box: ID` independently from its own captured code, and return ONE JSON list with exactly one stop per box, each adding `box` (the Box ID) to `file`, `start`, `end`, `note` (optional `title`). Deliver the whole list once through the supplied command. Each stop is validated separately: a wrong range, missing or duplicate `box`, or a stale source fails only that box, and omitted boxes are reported as failed. Do not split a batch into several fills; the request completes on the first fill.
 
 Omit parts, calls, examples, values, review data and generation evidence. Deliver through the exact supplied `--fill ID --pane P --tour TOKEN` command, with no placement or review flags. This replaces only the requested box and preserves siblings and navigation. Do not send a new `show` payload or save the result. The editor validates source freshness and rejects late/cancelled replies. A meaningful source change requires explicit retry using explain-current-box; do not automatically retry or manufacture a replacement request. Failures and timeouts let unrelated queued targets continue.
+
+### Write AST-backed tours
+
+Start with `code-tour ast ENTRY`. Use the returned region IDs and fill commands. Read the source and write the gist and body in the same pass. Each Markdown section starts with `## overview` or a region ID such as `## r2`. The first paragraph is the gist. Explain what the code accomplishes, what it reads or changes, and how it hands off to the next region. Use the current code as the authority. Treat older prose in a brief as a draft about older code. Put a route explanation in a separate section such as `## edge s3`, adding the caller ID or a `>SYMBOL` suffix if needed. A standard example can follow a box body under `### Example (generated)`. Use the source label that matches the evidence.
+
+Write the entry overviews and route edge notes in the originating conversation. Give workers whole snippets in walk order, starting where the reader is, and batch several light snippets together. Use the highest tier in each batch and the configured model for that tier. A worker runs `code-tour brief N --tour T`, reads interfaces and code, fills directly with `code-tour --fill N --tour T --model M`, and reports only `done` or `escalate: REASON`. Escalate an uncertain snippet one tier. Consider the model that wrote a box when following up on a reader question or raising its detail. Write the fills yourself if delegation or model mappings are unavailable. For a fallback result, author stops using the ordinary tour workflow below.
+
+For a requested Java example, supply a scratch `CodeTourScenario.java` containing a standalone launcher method that constructs the inputs and calls the relevant symbol. Submit it with `code-tour scenario BOX FILE --tour T` using the pending question's box ID. The editor captures results when the configured debugger can run the scenario with project consent. When asked for a fallback, answer with an illustrative example labelled `generated`.
 
 ### Author a tour
 

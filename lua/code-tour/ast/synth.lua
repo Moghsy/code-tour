@@ -122,21 +122,30 @@ end
 
 local function builder(type)
   local builder_name = type.name .. "Builder"
+  -- @SuperBuilder's fluent methods return the self type `B`, so a subclass builder keeps its
+  -- own type through calls inherited from a superclass builder
+  local fluent = has(type.annotations, "SuperBuilder") and "@self" or builder_name
   local members = { { kind = "method", name = "build", params = {}, returns = type.qname } }
   for _, f in ipairs(instance(type)) do
     if has(f.annotations, "Singular") then
-      members[#members + 1] = { kind = "method", name = singular(f), returns = builder_name,
+      members[#members + 1] = { kind = "method", name = singular(f), returns = fluent,
         params = { { name = singular(f), type = element(f) } } }
-      members[#members + 1] = { kind = "method", name = f.name, returns = builder_name,
+      members[#members + 1] = { kind = "method", name = f.name, returns = fluent,
         params = { { name = f.name, type = f.type } } }
-      members[#members + 1] = { kind = "method", name = "clear" .. cap(f.name), returns = builder_name, params = {} }
+      members[#members + 1] = { kind = "method", name = "clear" .. cap(f.name), returns = fluent, params = {} }
     else
-      members[#members + 1] = { kind = "method", name = f.name, returns = builder_name,
+      members[#members + 1] = { kind = "method", name = f.name, returns = fluent,
         params = { { name = f.name, type = f.type } } }
     end
   end
+  -- @SuperBuilder: the builder of a subclass extends its superclass's builder, so inherited
+  -- fields chain too (`Child.builder().parentField(x).childField(y).build()`)
+  local super
+  if has(type.annotations, "SuperBuilder") and type.superclass then
+    super = type.superclass .. "Builder"
+  end
   local specs = {
-    { kind = "type", name = builder_name, members = members },
+    { kind = "type", name = builder_name, members = members, extends = super and (type.superclass .. "." .. super) or nil },
     { kind = "method", name = "builder", static = true, params = {}, returns = builder_name },
   }
   if flag(type.args and type.args.Builder, "toBuilder") then
@@ -198,6 +207,21 @@ M.builtin = {
     JBossLog = logger("org.jboss.logging.Logger"),
     Flogger = logger("com.google.common.flogger.FluentLogger"),
   },
+}
+
+-- Python: the decorator is the trigger and class-level annotated names are the fields.
+-- `field(default=…)` and plain defaults make a parameter optional; ClassVar and init=False
+-- fields are not parameters.
+M.builtin.python = {
+  dataclass = function(type)
+    local params = {}
+    for _, f in ipairs(type.fields) do
+      if not f.static_var and not f.init_false then
+        params[#params + 1] = { name = f.name, type = f.type, optional = f.default or nil }
+      end
+    end
+    return { { kind = "constructor", name = "__init__", params = params } }
+  end,
 }
 
 -- Rules for a language: the built-ins, then the user's (which win on a name clash).

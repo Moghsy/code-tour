@@ -599,6 +599,7 @@ def analyze_main(argv):
     parser.add_argument('symbol', nargs='?', help='neighbors: the symbol id, label or a part of its id')
     parser.add_argument('--limit', type=int, default=15)
     parser.add_argument('--members', action='store_true', help='communities: list every member symbol')
+    parser.add_argument('--tests', action='store_true', help='include test code (left out of communities, hubs and crossings by default)')
     parser.add_argument('--project', type=Path)
     parser.add_argument('--pane', help='Use this running editor (its unsaved buffers count); default: headless Neovim')
     parser.add_argument('--agent-session')
@@ -610,7 +611,7 @@ def analyze_main(argv):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
-    request = dict(root=str(root), view=args.view, symbol=args.symbol, limit=args.limit, members=args.members or None)
+    request = dict(root=str(root), view=args.view, symbol=args.symbol, limit=args.limit, members=args.members or None, tests=args.tests or None)
     request = {key: value for key, value in request.items() if value is not None}
     if args.pane:
         target = choose(instances(), args.pane, session_key(args), root, [])

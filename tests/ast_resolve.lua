@@ -274,6 +274,18 @@ t.finish("ast resolve", function()
       "    Box.builder().label(\"l\").tag(\"t\").tags(java.util.List.of()).clearTags().build().toBuilder(); }",
       "}",
     },
+    ["app/Lombok3.java"] = {
+      "package app;",
+      "import lombok.*; import lombok.experimental.SuperBuilder;",
+      "@SuperBuilder class Animal { String species; }",
+      "@SuperBuilder class Dog extends Animal { String breed; ",
+      "  static void make() { Dog.builder().species(\"canis\").breed(\"lab\").build(); } }",
+      "class Mailer {",
+      "  @Builder Mailer(String host, int port) { }",
+      "  @Builder(builderMethodName = \"ofUrl\") static Mailer fromUrl(String url) { return null; }",
+      "  static void use() { Mailer.builder().host(\"h\").port(1).build(); }",
+      "}",
+    },
     ["app/Lombok.java"] = {
       "package app;",
       "import lombok.Builder; import lombok.Getter; import lombok.val;",
@@ -350,6 +362,15 @@ t.finish("ast resolve", function()
   eq(t.targets(t.site(box, "clearTags")), { "java:app.Box.BoxBuilder#clearTags()" }, "@Singular adds clear")
   eq(t.targets(t.site(box, "build")), { "java:app.Box.BoxBuilder#build()" }, "the chain survives @Singular")
   eq(t.targets(t.site(box, "toBuilder")), { "java:app.Box#toBuilder()" }, "@Builder(toBuilder = true)")
+  local dog = e.resolver:resolve_file("src/app/Lombok3.java").bodies["java:app.Dog#make()"]
+  eq(t.targets(t.site(dog, "Dog.builder")), { "java:app.Dog#builder()" }, "@SuperBuilder gives builder()")
+  eq(t.targets(t.site(dog, "species")), { "java:app.Animal.AnimalBuilder#species(String)" },
+    "a subclass builder chains its superclass's fields through its extended builder")
+  eq(t.targets(t.site(dog, "breed")), { "java:app.Dog.DogBuilder#breed(String)" }, "and its own")
+  local mailer = e.resolver:resolve_file("src/app/Lombok3.java").bodies["java:app.Mailer#use()"]
+  eq(t.targets(t.site(mailer, "Mailer.builder")), { "java:app.Mailer#builder()" }, "@Builder on a constructor")
+  eq(t.targets(t.site(mailer, "host")), { "java:app.Mailer.MailerBuilder#host(String)" }, "takes the constructor's parameters")
+  eq(t.targets(t.site(mailer, "port")), { "java:app.Mailer.MailerBuilder#port(int)" }, "all of them")
   -- configured boundary: a call the language cannot follow continues at a project symbol
   local ast_options = require("code-tour.ast").options
   ast_options.boundaries = { { call = "Other.nothing", to = "java:app.Other#uniqueThing()" } }

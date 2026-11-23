@@ -150,7 +150,7 @@ function M.analyze(opts)
   if opts.view == "concepts" then
     return M.concepts({ root = opts.root, cache_dir = opts.cache_dir, action = "list" })
   end
-  local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest))
+  local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest)) .. (opts.tests and "+tests" or "")
   local cache = vim.fs.dirname(built.path) .. "/analysis.json"
   local data
   local cfd = io.open(cache, "rb")
@@ -163,7 +163,7 @@ function M.analyze(opts)
   end
   local cached = data ~= nil
   if not data then
-    data = analysis.compute(graph)
+    data = analysis.compute(graph, { tests = opts.tests })
     local tmp = cache .. ".tmp" .. vim.uv.os_getpid()
     local wfd = assert(io.open(tmp, "w"))
     wfd:write(vim.json.encode({ key = key, data = data }))

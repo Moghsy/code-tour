@@ -8,25 +8,43 @@ local M = {}
 local STRUCTURE = { calls = 1, overrides = 1, inherits = 1, implements = 1, extends = 1, references = 0.5 }
 local CONTAINS = 2
 
+-- Test code is real code, but it calls everything and would pull unrelated modules into one
+-- cluster, so communities leave it out unless asked (`--tests`).
+local function is_test(node)
+  local file = node.source_file or ""
+  local base = file:match("([^/]+)$") or file
+  return file:match("^tests?/") ~= nil or file:match("/tests?/") ~= nil or base:match("^test_") ~= nil
+    or base:match("_test%.py$") ~= nil or base:match("Tests?%.java$") ~= nil or base == "conftest.py"
+end
+
 local function owner_of(id)
   return id:match("^(.-)#")
 end
 
-local function package_of(id)
+-- Java-style ids (`java:a.b.Type#m()`) carry the package; others (Python) use the file's module path.
+local function package_of(id, node)
+  if not id:find("#", 1, true) and node and node.source_file then
+    return (node.source_file:gsub("%.%w+$", ""):gsub("^src/", ""):gsub("/__init__$", ""):gsub("/", "."))
+  end
   local qname = id:match("^%a+:([^#]+)")
   return qname and qname:match("^(.*)%.[^.]+$") or ""
 end
 
+-- The unit a symbol belongs to: its type (`Order`) or, for a module-level function, its module.
 local function type_of(id)
-  local qname = owner_of(id) or id:match("^%a+:(.+)$")
-  return qname and qname:match("([^.]+)$") or id
+  local owner = owner_of(id)
+  if owner then
+    return owner:match("([^.]+)$") or id
+  end
+  local qname = id:match("^%a+:(.+)$") or id
+  return qname:match("^(.*)%.[^.]+$") and qname:match("([^.]+)%.[^.]+$") or qname
 end
 
 -- Weighted undirected adjacency over code symbols; `directed` keeps call/inherit edges by direction.
-local function adjacency(graph)
+local function adjacency(graph, with_tests)
   local nodes, adj, out, into = {}, {}, {}, {}
   for _, node in ipairs(graph.nodes) do
-    if node.kind ~= "file" then
+    if node.kind ~= "file" and (with_tests or not is_test(node)) then
       nodes[node.id] = node
       adj[node.id], out[node.id], into[node.id] = {}, {}, {}
     end
@@ -56,13 +74,15 @@ local function adjacency(graph)
   return nodes, adj, out, into
 end
 
--- Label propagation in sorted order: deterministic, no dependencies.
+-- Label propagation in sorted order: deterministic, no dependencies. Every symbol starts in
+-- the community of its file, so the unit that merges is a file and not a single symbol; that
+-- keeps communities cohesive and stops a large graph dissolving into thousands of singletons.
 local function propagate(nodes, adj)
   local ids = vim.tbl_keys(nodes)
   table.sort(ids)
   local label = {}
   for _, id in ipairs(ids) do
-    label[id] = id
+    label[id] = nodes[id].source_file or id
   end
   for _ = 1, 30 do
     local changed = false
@@ -88,6 +108,38 @@ local function propagate(nodes, adj)
   return label
 end
 
+-- A community of fewer than `min` symbols joins the neighbouring community it is most
+-- connected to; one with no neighbours stays as it is.
+local function absorb_small(label, adj, min)
+  local size = {}
+  for _, l in pairs(label) do
+    size[l] = (size[l] or 0) + 1
+  end
+  local ids = vim.tbl_keys(label)
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    if size[label[id]] < min then
+      local score = {}
+      for other, weight in pairs(adj[id]) do
+        if label[other] ~= label[id] and size[label[other]] >= min then
+          score[label[other]] = (score[label[other]] or 0) + weight
+        end
+      end
+      local best, best_score
+      for candidate, value in pairs(score) do
+        if not best or value > best_score or (value == best_score and candidate < best) then
+          best, best_score = candidate, value
+        end
+      end
+      if best then
+        size[label[id]] = size[label[id]] - 1
+        label[id] = best
+        size[best] = size[best] + 1
+      end
+    end
+  end
+end
+
 local function top(counts, n)
   local list = vim.tbl_keys(counts)
   table.sort(list, function(a, b)
@@ -97,9 +149,11 @@ local function top(counts, n)
   return vim.list_slice(list, 1, n)
 end
 
-function M.compute(graph)
-  local nodes, adj, out, into = adjacency(graph)
+function M.compute(graph, opts)
+  opts = opts or {}
+  local nodes, adj, out, into = adjacency(graph, opts.tests)
   local label = propagate(nodes, adj)
+  absorb_small(label, adj, opts.min_size or 3)
   local groups = {}
   for id, l in pairs(label) do
     groups[l] = groups[l] or {}
@@ -110,7 +164,7 @@ function M.compute(graph)
     table.sort(members)
     local packages, types = {}, {}
     for _, id in ipairs(members) do
-      local p, ty = package_of(id), type_of(id)
+      local p, ty = package_of(id, nodes[id]), type_of(id)
       packages[p] = (packages[p] or 0) + 1
       types[ty] = (types[ty] or 0) + 1
     end

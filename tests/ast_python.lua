@@ -61,6 +61,42 @@ local function test()
     imports = imports or (e.source == "file:" .. rel and e.target == "python:checkout.words.clean" and e.relation == "imports")
   end
   t.check(calls and contains and imports, "symbol graph includes Python calls, imports and containment")
+  -- a dataclass has the constructor its fields imply, so building one is followed
+  vim.fn.writefile({
+    "from dataclasses import dataclass, field",
+    "from typing import ClassVar",
+    "",
+    "@dataclass",
+    "class Point:",
+    "    x: int",
+    "    y: int = 0",
+    "    tags: list = field(default_factory=list)",
+    "    count: ClassVar[int] = 0",
+    "    def norm(self):",
+    "        return self.x",
+    "",
+    "@dataclass",
+    "class Own:",
+    "    a: int",
+    "    def __init__(self):",
+    "        self.a = 1",
+    "",
+    "def build():",
+    "    p = Point(1, y=2)",
+    "    q = Point()",
+    "    r = Own()",
+    "    p.norm()",
+    "    return p",
+  }, root .. "/shapes.py")
+  local shapes = t.index(root).resolver:resolve_file("shapes.py")
+  local build = shapes.bodies["python:shapes.build"]
+  t.eq(t.targets(t.site(build, "Point")), { "python:shapes.Point.__init__" }, "a dataclass construction binds the generated __init__")
+  t.eq(shapes.symbols["python:shapes.Point.__init__"].synthetic, "dataclass", "the constructor is marked synthetic")
+  t.eq(#shapes.symbols["python:shapes.Point.__init__"].params, 4, "self plus x, y and tags; ClassVar is not a parameter")
+  t.eq(t.targets(t.site(build, "Point", 2)), {}, "a call missing a required field does not bind")
+  t.eq(t.targets(t.site(build, "Own")), { "python:shapes.Own.__init__" }, "a written __init__ is kept")
+  t.eq(shapes.symbols["python:shapes.Own.__init__"].synthetic, nil, "and is not replaced")
+  t.eq(t.targets(t.site(build, "p.norm")), { "python:shapes.Point.norm" }, "the instance carries its class")
   vim.fn.writefile({ "def work():", "    return 1" }, root .. "/first.py")
   vim.fn.writefile({ "def work():", "    return 1" }, root .. "/second.py")
   for _ = 1, 2 do

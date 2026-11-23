@@ -551,6 +551,11 @@ function R:receiver_type(desc, ctx)
     if target then
       local m = self.idx:symbol(target.symbol)
       local t = m and self:returns(m) or { kind = "unknown" }
+      if m and m.self_return then
+        -- a fluent method that returns the type it was called on (Lombok @SuperBuilder's `B`)
+        local receiver = s.receiver_type and self.idx:type(s.receiver_type)
+        t = receiver and project(receiver, "chain") or t
+      end
       if target.confidence ~= "EXTRACTED" then
         t = vim.tbl_extend("force", t, { heuristic = t.heuristic or true })
       end

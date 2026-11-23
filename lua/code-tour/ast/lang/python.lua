@@ -1,5 +1,5 @@
 -- Python Tree-sitter backend. Symbols are scoped by module and lexical owner.
-local M = { name = "python", parser = "python", extensions = { ".py" }, version = 1 }
+local M = { name = "python", parser = "python", extensions = { ".py" }, version = 2 }
 
 local function set(items)
   local out = {}
@@ -185,6 +185,37 @@ function M.declarations(file, root, src)
     bindings[sym.name] = sym.id
   end
 
+  -- Generated members (dataclasses): implicit symbols from ast/synth.lua rules. A class that
+  -- writes its own __init__ keeps it.
+  local function synthesize(class, scope)
+    local fields = {}
+    for name, id in pairs(class.fields) do
+      local f = facts.symbols[id]
+      if f and f.annotated and not f.class_var then
+        fields[#fields + 1] = { name = name, type = f.type, default = f.default, line = f.range.start[1],
+          annotations = {}, args = {} }
+      end
+    end
+    table.sort(fields, function(a, b) return a.line < b.line end)
+    local specs = require("code-tour.ast.synth").specs(M.name, { name = class.name, qname = class.qname,
+      kind = "class", annotations = class.annotations, args = {}, fields = fields })
+    for _, spec in ipairs(specs) do
+      local id = class.id .. "." .. spec.name
+      if spec.kind == "constructor" and not facts.symbols[id] then
+        local params = { { name = "self", range = class.range } }
+        for _, p in ipairs(spec.params) do
+          params[#params + 1] = { name = p.name, type = p.type, range = class.range, optional = p.optional }
+        end
+        local ctor = { id = id, kind = "constructor", name = spec.name, qname = class.qname .. "." .. spec.name,
+          label = class.name .. "." .. spec.name, owner = class.id, range = class.range, params = params,
+          returns_spelled = class.name, modifiers = { public = true }, annotations = {}, static = false,
+          implicit = true, synthetic = spec.rule, signature = spec.name .. "(" .. #spec.params .. " fields)" }
+        add(ctor, class)
+        class.methods[#class.methods + 1] = id
+      end
+    end
+  end
+
   local function walk(container, scope)
     for _, child in ipairs(children(container)) do
       local node = field(child, "definition") or child
@@ -252,6 +283,9 @@ function M.declarations(file, root, src)
           pending[sym.id] = body
           walk(body, sym)
         end
+        if class then
+          synthesize(sym, scope)
+        end
       elseif scope and kind == "expression_statement" and scope.kind == "class" then
         local assignment = node:named_child(0)
         local left = field(assignment, "left")
@@ -259,9 +293,13 @@ function M.declarations(file, root, src)
           local name = text(left, src)
           local id = scope.id .. "#" .. name
           scope.fields[name] = id
+          local annotated = field(assignment, "type")
+          local spelled = annotated and vim.trim(text(annotated, src))
           facts.symbols[id] = { id = id, kind = "field", name = name, label = scope.name .. "." .. name,
             file = file, owner = scope.id, range = range(assignment), source = "ast", static = true,
-            type = type_ref(field(assignment, "type"), src) }
+            type = type_ref(annotated, src), annotated = annotated ~= nil or nil,
+            default = field(assignment, "right") ~= nil or nil,
+            class_var = spelled and (spelled:match("^ClassVar") or spelled:match("%.ClassVar")) and true or nil }
         end
       end
     end

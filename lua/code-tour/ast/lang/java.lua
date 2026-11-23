@@ -8,7 +8,7 @@ local M = {
   name = "java",
   extensions = { ".java" },
   parser = "java",
-  version = 10, -- bump when the shape of extracted facts changes (invalidates the cache)
+  version = 11, -- bump when the shape of extracted facts changes (invalidates the cache)
 }
 
 M.types = {
@@ -294,7 +294,7 @@ function M.declarations(file, root, src)
       keys[i] = param_key(p)
     end
     local id = owner.id .. "#" .. name .. "(" .. table.concat(keys, ",") .. ")"
-    local mods, annotations = modifiers(ctx, n)
+    local mods, annotations, annotation_args = modifiers(ctx, n)
     local body = field(n, "body")
     local abstract = body == nil
     local signature
@@ -328,6 +328,7 @@ function M.declarations(file, root, src)
       returns_spelled = ret and ret.spelled,
       modifiers = mods,
       annotations = annotations,
+      annotation_args = annotation_args,
       static = mods.static == true,
       abstract = abstract,
       signature = signature,
@@ -427,8 +428,29 @@ function M.declarations(file, root, src)
       end
     end
     table.sort(fields, function(a, b) return a.line < b.line end)
-    local specs = require("code-tour.ast.synth").specs(M.name, { name = owner.name, qname = owner.qname,
-      kind = owner.kind, annotations = owner.annotations, args = owner.annotation_args, fields = fields })
+    local synth = require("code-tour.ast.synth")
+    local superclass = owner.extends[1] and owner.extends[1].spelled
+    local specs = synth.specs(M.name, { name = owner.name, qname = owner.qname, kind = owner.kind,
+      annotations = owner.annotations, args = owner.annotation_args, fields = fields, superclass = superclass })
+    -- @Builder on a constructor or a static method builds from that executable's parameters
+    for _, id in ipairs(owner.methods) do
+      local m = facts.symbols[id]
+      local marked = false
+      for _, a in ipairs(m.annotations or {}) do
+        marked = marked or a:match("([^.]+)$") == "Builder"
+      end
+      if marked and (m.kind == "constructor" or m.static) and not m.implicit then
+        local built = m.kind == "constructor" and owner or { name = (m.returns or "?"):match("([^.<]+)$") or "?", qname = m.returns_spelled or m.returns or "?" }
+        local params = {}
+        for _, p in ipairs(m.params) do
+          params[#params + 1] = { name = p.name, type = p.type, annotations = {}, args = {} }
+        end
+        for _, spec in ipairs(synth.specs(M.name, { name = built.name, qname = built.qname, kind = "class",
+          annotations = { "Builder" }, args = { Builder = (m.annotation_args or {}).Builder }, fields = params })) do
+          specs[#specs + 1] = spec
+        end
+      end
+    end
     local function member(holder, spec)
       local keys = {}
       for i, p in ipairs(spec.params or {}) do
@@ -444,7 +466,9 @@ function M.declarations(file, root, src)
       end
       declare({ id = id, kind = spec.kind, name = spec.name, label = holder.name .. "." .. spec.name .. "(" .. table.concat(keys, ", ") .. ")",
         file = file, range = holder.range, owner = holder.id, params = params, varargs = false,
-        returns = spec.returns, returns_spelled = spec.returns, modifiers = {}, annotations = {},
+        returns = spec.returns ~= "@self" and spec.returns or nil,
+        returns_spelled = spec.returns ~= "@self" and spec.returns or nil, self_return = spec.returns == "@self" or nil,
+        modifiers = {}, annotations = {},
         static = spec.static == true, abstract = false, implicit = true, synthetic = spec.rule,
         signature = (spec.returns or "") .. " " .. spec.name .. "(" .. table.concat(keys, ", ") .. ")",
         type_params = {}, source = "ast" })
@@ -467,6 +491,9 @@ function M.declarations(file, root, src)
             range = owner.range, outer = owner.id, extends = {}, implements = {}, type_params = {}, fields = {},
             methods = {}, nested = {}, components = {}, modifiers = { static = true }, annotations = {},
             abstract = false, implicit = true, synthetic = spec.rule, source = "ast" }
+          if spec.extends then
+            nested.extends = { { name = spec.extends:match("([^.]+)$"), spelled = spec.extends } }
+          end
           declare(nested)
           owner.nested[spec.name] = id
           facts.types[qname] = id

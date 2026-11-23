@@ -28,6 +28,15 @@ t.finish("ast analysis", function()
   local again = view("communities", { members = true })
   eq(again.communities, first.communities, "clustering is deterministic")
 
+  local with_tests = view("communities", { tests = true })
+  check(with_tests.total >= 1, "test code can be included")
+  local none = 0
+  for _, c in ipairs(first.communities) do
+    for _, id in ipairs(c.members) do
+      if id:find("Test", 1, true) then none = none + 1 end
+    end
+  end
+  eq(none, 0, "test code is left out of communities by default")
   local gods = view("gods", { limit = 3 })
   eq(#gods.hubs, 3, "limit applies")
   check(gods.hubs[1].degree >= gods.hubs[2].degree, "hubs are ordered by degree")

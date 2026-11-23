@@ -570,13 +570,15 @@ def graph_main(argv):
 
 def codegraph_main(argv):
     parser = argparse.ArgumentParser(description='Write the project symbol graph (graphify node-link JSON) and print its path')
-    parser.add_argument('--out', help='Output file (default: $TMPDIR/code-tour-UID/codegraph.json)')
+    parser.add_argument('--out', help='Output file (default: the persisted .code-tour/graph.json)')
+    parser.add_argument('--rebuild', action='store_true', help='Rebuild even when no source file changed')
     parser.add_argument('--project', type=Path, help='Project directory (default: the git top level of the cwd)')
     parser.add_argument('--pane', help='Use this running editor (its unsaved buffers count); default: headless Neovim')
     parser.add_argument('--agent-session')
     args = parser.parse_args(argv)
     root = (args.project or Path.cwd()).resolve()
-    opts = dict(root=str(root))
+    opts = dict(root=str(root), rebuild=args.rebuild or None)
+    opts = {key: value for key, value in opts.items() if value is not None}
     if args.out:
         opts['out'] = str(Path(args.out).resolve())
     if args.pane:
@@ -587,6 +589,37 @@ def codegraph_main(argv):
     else:
         result = headless('codegraph', opts)
     print(json.dumps(result))
+    return 0
+
+
+def analyze_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour analyze',
+        description='Lazy views over the persisted project graph: communities, hub symbols, community crossings, neighbors')
+    parser.add_argument('view', choices=('communities', 'gods', 'crossings', 'neighbors'))
+    parser.add_argument('symbol', nargs='?', help='neighbors: the symbol id, label or a part of its id')
+    parser.add_argument('--limit', type=int, default=15)
+    parser.add_argument('--members', action='store_true', help='communities: list every member symbol')
+    parser.add_argument('--project', type=Path)
+    parser.add_argument('--pane', help='Use this running editor (its unsaved buffers count); default: headless Neovim')
+    parser.add_argument('--agent-session')
+    args = parser.parse_args(argv)
+    if args.view == 'neighbors' and not args.symbol:
+        parser.error('neighbors needs a symbol')
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0:
+            root = Path(git.stdout.strip()).resolve()
+    request = dict(root=str(root), view=args.view, symbol=args.symbol, limit=args.limit, members=args.members or None)
+    request = {key: value for key, value in request.items() if value is not None}
+    if args.pane:
+        target = choose(instances(), args.pane, session_key(args), root, [])
+        if target is None:
+            raise RuntimeError('No matching editor; check --pane')
+        result = rpc(target['address'], 'return require("tour").analyze(...)', [request], timeout=120)
+    else:
+        result = headless('analyze', dict(request=json.dumps(request)))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -951,6 +984,8 @@ def main(argv=None):
         return codegraph_main(argv[1:])
     if argv and argv[0] == 'ast':
         return ast_main(argv[1:])
+    if argv and argv[0] == 'analyze':
+        return analyze_main(argv[1:])
     if argv and argv[0] == 'adjust':
         return adjust_main(argv[1:])
     if argv and argv[0] == 'brief':

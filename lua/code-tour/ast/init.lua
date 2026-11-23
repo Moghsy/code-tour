@@ -92,22 +92,108 @@ end
 
 -- §15: write the symbol graph as graphify-compatible node-link JSON.
 -- opts: { root?, out?, cache_dir? } -> { path, nodes, links, files, truncated? }
+-- The persisted project graph (`.code-tour/graph.json`, beside the notes store): graphify's
+-- node-link format, rebuilt only when a file, the language set or the resolution config changed.
+-- Unchanged files are never re-extracted (facts are cached by blob SHA), so a rebuild is
+-- incremental. `manifest` records what the graph was built from; opts.rebuild forces a rebuild.
+local function manifest_of(idx)
+  local files = {}
+  for _, rel in ipairs(idx.files) do
+    files[rel] = idx:blob(rel)
+  end
+  local synthesizers = {}
+  for language, rules in pairs(M.options.synthesizers or {}) do
+    synthesizers[language] = vim.tbl_keys(rules)
+    table.sort(synthesizers[language])
+  end
+  return { schema = 1, files = files,
+    config = vim.fn.sha256(vim.inspect({ M.options.languages, M.options.boundaries, synthesizers })) }
+end
+
+-- Analysis views over the persisted graph: view = "communities" | "gods" | "crossings" | "neighbors".
+-- Computed on first use, then cached in analysis.json under the graph's manifest hash.
+function M.analyze(opts)
+  opts = opts or {}
+  local built = M.code_graph({ root = opts.root, cache_dir = opts.cache_dir, out = opts.graph })
+  local fd = assert(io.open(built.path, "rb"))
+  local graph = vim.json.decode(fd:read("*a"), { luanil = { object = true, array = true } })
+  fd:close()
+  local analysis = require("code-tour.ast.analysis")
+  local limit = tonumber(opts.limit) or 15
+  if opts.view == "neighbors" then
+    local result, err = analysis.neighbors(graph, assert(opts.symbol, "neighbors needs a symbol"))
+    if not result then
+      error(err, 0)
+    end
+    return result
+  end
+  local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest))
+  local cache = vim.fs.dirname(built.path) .. "/analysis.json"
+  local data
+  local cfd = io.open(cache, "rb")
+  if cfd then
+    local ok, old = pcall(vim.json.decode, cfd:read("*a"), { luanil = { object = true, array = true } })
+    cfd:close()
+    if ok and type(old) == "table" and old.key == key then
+      data = old.data
+    end
+  end
+  local cached = data ~= nil
+  if not data then
+    data = analysis.compute(graph)
+    local tmp = cache .. ".tmp" .. vim.uv.os_getpid()
+    local wfd = assert(io.open(tmp, "w"))
+    wfd:write(vim.json.encode({ key = key, data = data }))
+    wfd:close()
+    assert(vim.uv.fs_rename(tmp, cache))
+  end
+  if opts.view == "gods" then
+    return { hubs = vim.list_slice(data.hubs, 1, limit), cached = cached }
+  elseif opts.view == "crossings" then
+    return { crossings = vim.list_slice(data.crossings, 1, limit), communities = vim.tbl_map(function(c)
+      return { id = c.id, name = c.name, size = c.size }
+    end, data.communities), cached = cached }
+  end
+  local communities = {}
+  for _, c in ipairs(vim.list_slice(data.communities, 1, limit)) do
+    communities[#communities + 1] = { id = c.id, name = c.name, size = c.size, packages = c.packages,
+      types = c.types, members = opts.members and c.members or nil }
+  end
+  return { communities = communities, total = #data.communities, cached = cached }
+end
+
 function M.code_graph(opts)
   opts = opts or {}
   local idx = M.index({ root = opts.root, cache_dir = opts.cache_dir })
+  local store = require("code-tour.ast.store").new(idx, M.options)
+  local out = opts.out
+  if not out or out == "" then
+    out = store.path .. "/graph.json"
+  end
+  out = vim.fn.fnamemodify(out, ":p")
+  idx:scan()
+  local manifest = manifest_of(idx)
+  if not opts.rebuild then
+    local fd = io.open(out, "rb")
+    if fd then
+      local ok, old = pcall(vim.json.decode, fd:read("*a"), { luanil = { object = true, array = true } })
+      fd:close()
+      if ok and type(old) == "table" and old.graph and vim.deep_equal(old.graph.manifest, manifest) then
+        return { path = out, nodes = #old.nodes, links = #old.links, files = #idx.files, root = idx.root,
+          reused = true, truncated = idx.truncated or nil }
+      end
+    end
+  end
   local graph = require("code-tour.ast.codegraph").build(idx)
   if #graph.nodes == 0 and next(idx.errors) then
     local files = vim.tbl_keys(idx.errors)
     table.sort(files)
     error(idx.errors[files[1]], 0)
   end
-  local out = opts.out
-  if not out or out == "" then
-    local dir = (vim.env.TMPDIR or "/tmp") .. "/code-tour-" .. vim.uv.getuid()
-    vim.fn.mkdir(dir, "p")
-    out = dir .. "/codegraph.json"
+  graph.graph.manifest = manifest
+  if out == store.path .. "/graph.json" then
+    store:begin_write()
   end
-  out = vim.fn.fnamemodify(out, ":p")
   vim.fn.mkdir(vim.fs.dirname(out), "p")
   local tmp = out .. ".tmp" .. vim.uv.os_getpid()
   local fd = assert(io.open(tmp, "w"))
@@ -115,7 +201,7 @@ function M.code_graph(opts)
   fd:close()
   assert(vim.uv.fs_rename(tmp, out))
   return { path = out, nodes = #graph.nodes, links = #graph.links, files = #idx.files, root = idx.root,
-    truncated = idx.truncated or nil }
+    reused = false, truncated = idx.truncated or nil }
 end
 
 function M.fallback_reason(err)

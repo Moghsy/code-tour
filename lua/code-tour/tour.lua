@@ -990,6 +990,10 @@ function M.graph()
 end
 
 -- Write the project's symbol graph (SPEC-ast-graph §15) and return its path.
+function M.analyze(opts)
+  return require("code-tour.ast").analyze(opts)
+end
+
 function M.code_graph(opts)
   return require("code-tour.ast").code_graph(opts)
 end

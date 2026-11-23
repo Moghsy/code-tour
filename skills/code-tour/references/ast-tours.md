@@ -23,6 +23,12 @@ The first paragraph of each section is the gist. A snippet-specific fill accepts
 - Queries use headless Neovim by default. Use `--pane P` when the answer needs the running editor's unsaved buffers. Use `--json` or `--budget N` when you need structured or bounded output.
 - `code-tour note SYMBOL FILE` can write a coding note using the region IDs from `explain` or `flow`. Use current source to verify what the stored notes tell you.
 
+## The persisted graph
+
+`code-tour codegraph` writes the project's resolved symbol graph to `.code-tour/graph.json` (graphify's node-link format, kept out of git like the notes). It is reused while no source file, language setting, boundary rule or synthesizer changed, and otherwise rebuilt incrementally, because unchanged files are never re-extracted. Pass `--rebuild` to force it. Read it before designing a tour: every call link carries its `confidence` and `via`.
+
+`code-tour analyze VIEW` reads that graph and computes lazily, caching in `.code-tour/analysis.json` until a source file changes: `communities` (clusters of related symbols, named by package and type; `--members` lists them), `gods` (the symbols with the most callers and callees), `crossings` (calls that span two communities) and `neighbors SYMBOL` (callers and callees with their confidence and `via`). These are facts about the graph's shape, not a ranking of what matters: use them to understand the code, then design the route yourself.
+
 ## Fill ids, Markdown and partial fills
 
 Fill ids look like `n13`, a snippet of the live tour; anything else is refused before the editor is asked. Pass `--markdown` with `--fill` so the input is never parsed as JSON. A fill that leaves boxes unwritten returns `partial: true`, a `warning` and the `remaining` list, and the CLI repeats the warning on stderr: keep filling until `remaining` is empty.

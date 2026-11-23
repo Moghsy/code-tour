@@ -439,9 +439,35 @@ function M.snippet_lines(sn, status)
         end
       end
       for key, list in pairs(groups) do
-        groups[key] = vim.tbl_map(function(item)
-          return site_item(item.s, item.owners)
-        end, list)
+        if key == "unresolved" then
+          -- Calls that leave the project (builtin, library) cannot hide a gap, so they read as a
+          -- count with a few examples; the unknown ones (dynamic, abstract, generic) stay itemised.
+          local kept, quiet = {}, { builtin = {}, library = {} }
+          for _, item in ipairs(list) do
+            local bucket = quiet[item.s.unresolved or ""]
+            if bucket then
+              bucket[#bucket + 1] = item
+            else
+              kept[#kept + 1] = site_item(item.s, item.owners)
+            end
+          end
+          for _, kind in ipairs({ "builtin", "library" }) do
+            local bucket = quiet[kind]
+            if #bucket > 0 then
+              local names = {}
+              for i = 1, math.min(3, #bucket) do
+                names[i] = bucket[i].s.site .. " " .. bucket[i].s.text
+              end
+              kept[#kept + 1] = ("%s ×%d (%s%s)"):format(kind, #bucket, table.concat(names, ", "),
+                #bucket > 3 and (", +" .. (#bucket - 3) .. " more") or "")
+            end
+          end
+          groups[key] = kept
+        else
+          groups[key] = vim.tbl_map(function(item)
+            return site_item(item.s, item.owners)
+          end, list)
+        end
       end
       local order = vim.list_extend(vim.deepcopy(group_order), { "ambiguous" })
       for _, key in ipairs(order) do

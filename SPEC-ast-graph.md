@@ -421,7 +421,7 @@ Depth-first from each entry, visiting sites in evaluation order. Some sites get 
 
 | Check, in order | Label |
 | --- | --- |
-| no target, or a built-in | `unresolved`, listed in the outline |
+| no target, or a built-in | `unresolved`, listed in the outline; `builtin` and `library` calls cannot hide a gap, so a region lists them as a count with a few examples (`builtin ×12 (s7 print, …, +9 more)`) while `dynamic`, `abstract` and `generic` calls stay itemised. `--json` keeps every site |
 | `accessor` site | `accessor` |
 | target on the current path, or already visited | `ref`, why "already shown" |
 | same target already reached from this symbol | `ref` |

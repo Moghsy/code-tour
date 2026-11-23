@@ -206,6 +206,7 @@ nvim --clean --headless -l tests/inactive.lua
 nvim --clean --headless -l tests/count.lua
 nvim --clean --headless -l tests/lookup.lua
 nvim --clean --headless -l tests/diff.lua
+nvim --clean --headless -l tests/diff_fuzz.lua   # properties over random diffs; DIFF_FUZZ_SEED, DIFF_FUZZ_CASES, DIFF_FUZZ_REPLIES
 nvim --clean --headless -l tests/saved_batch.lua
 nvim --clean --headless -l tests/branches.lua
 nvim --clean --headless -l tests/tree.lua

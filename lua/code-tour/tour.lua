@@ -2325,19 +2325,40 @@ function M.fill(id, input, opts)
           target_stop.added[line] = (stop.added or {})[line]
         end
         local retained = {}
+        local seen = {} -- base line numbers already shown by this stop
         for _, removed in ipairs(target_stop.removed) do
-          local lines, owners = {}, {}
+          local lines, owners, ids = {}, {}, {}
           for index, line in ipairs(removed.lines) do
             local owner = (removed.owners or {})[index] or removed.line
             if owner < stop.start or owner > stop["end"] then
               lines[#lines + 1], owners[#owners + 1] = line, owner
+              local id = (removed.ids or {})[index]
+              ids[#ids + 1] = id
+              if id then seen[id] = true end
             end
           end
           if #lines > 0 then
-            retained[#retained + 1] = { line = removed.line, above = removed.above, lines = lines, owners = owners }
+            retained[#retained + 1] = { line = removed.line, above = removed.above, lines = lines, owners = owners,
+              ids = #ids == #lines and ids or nil }
           end
         end
-        vim.list_extend(retained, stop.removed or {})
+        -- A deletion on the boundary between two parts is owned by both: a removed line is added
+        -- only once, whichever part brought it first.
+        for _, removed in ipairs(stop.removed or {}) do
+          local lines, owners, ids = {}, {}, {}
+          for index, line in ipairs(removed.lines) do
+            local id = (removed.ids or {})[index]
+            if not (id and seen[id]) then
+              lines[#lines + 1], owners[#owners + 1] = line, (removed.owners or {})[index] or removed.line
+              ids[#ids + 1] = id
+              if id then seen[id] = true end
+            end
+          end
+          if #lines > 0 then
+            retained[#retained + 1] = { line = removed.line, above = removed.above, lines = lines, owners = owners,
+              ids = #ids == #lines and ids or nil }
+          end
+        end
         target_stop.removed = retained
       end
     end

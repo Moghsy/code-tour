@@ -41,4 +41,11 @@ t.finish("ast kb", function()
   eq(by[entry.symbol].changed, { callee.symbol }, "and names the callee that changed")
   check(by[entry.symbol].questions_stale, "a question about changed code is kept but flagged")
   eq(after.regenerate, { callee.symbol, entry.symbol }, "regenerate callee first")
+
+  -- the regenerate list is a valid entry list: a tour over it holds exactly the stale symbols, unwritten
+  local again = assert(require("code-tour.ast.live").new({ root = root, entries = after.regenerate, cache_dir = t.cache }))
+  local seen = {}
+  for _, sn in ipairs(again:all()) do seen[sn.symbol] = true end
+  check(seen[callee.symbol] and seen[entry.symbol], "a tour over the regenerate list holds the stale symbols")
+  check(again:status(again.snippets.n1) ~= "fresh", "and the stale note is not reused as fresh")
 end)

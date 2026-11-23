@@ -671,6 +671,8 @@ def ast_main(argv):
         description='Build an AST-backed tour (SPEC-ast-graph.md)')
     parser.add_argument('entries', nargs='*', help="Entry symbols: 'Type#method', 'Type#method(Params)', 'Type.method', a type, or path:line")
     parser.add_argument('--auto', action='store_true', help='Choose entries from project structure')
+    parser.add_argument('--stale', action='store_true', help='Entries are the symbols whose stored explanations are stale (see `analyze kb`), callee first; fresh notes are reused')
+    parser.add_argument('--limit', type=int, default=10, help='--stale: at most this many entries')
     override_arguments(parser)
     parser.add_argument('--through', action='append', default=[], help='A symbol the main flow must pass through (repeatable)')
     parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
@@ -683,13 +685,29 @@ def ast_main(argv):
     parser.add_argument('--origin-session')
     parser.add_argument('--origin-pane')
     args = parser.parse_args(argv)
-    if not args.entries and not args.auto and not any(item['kind'] == 'add' for item in args.overrides or []):
-        parser.error('pass an entry symbol or --auto')
+    if not args.entries and not args.auto and not args.stale and not any(item['kind'] == 'add' for item in args.overrides or []):
+        parser.error('pass an entry symbol, --stale or --auto')
     root = (args.project or Path.cwd()).resolve()
     if not args.project:
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
+    if args.stale:
+        kb_request = dict(root=str(root), view='kb')
+        if args.pane:
+            kb_target = choose(instances(), args.pane, session_key(args), root, [])
+            if kb_target is None:
+                raise RuntimeError('No matching editor; check --pane')
+            report = rpc(kb_target['address'], 'return require("tour").analyze(...)', [kb_request], timeout=120)
+        else:
+            report = headless('analyze', dict(request=json.dumps(kb_request)))
+        stale = report.get('regenerate') or []
+        if not stale and not args.entries:
+            print('nothing stale: every stored explanation matches the code')
+            return 0
+        if len(stale) > args.limit:
+            print(f'{len(stale)} stale symbols; taking the first {args.limit} (callee first), run again for the rest', file=sys.stderr)
+        args.entries = args.entries + stale[:args.limit]
     request = dict(entries=args.entries, root=str(root), through=args.through)
     if args.auto:
         request['auto'] = True

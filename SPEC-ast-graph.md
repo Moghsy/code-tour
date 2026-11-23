@@ -817,6 +817,8 @@ Members generated at build time (Lombok `@Builder`, `@Getter`, `@Setter`, `@Data
 
 **Knowledge base view (`analyze kb`).** Graph, notes and concepts stay separate files and share one key, the symbol id; `kb.lua` joins them at read time, copying nothing. Per symbol the newest note version of each region is checked with the store's own freshness test, giving `fresh`, `stale` (`code changed`, or `callee changed` with the changed callees listed, from the callee fingerprints recorded in the note's evidence), `orphaned` (symbol missing) or `missing` (a function, method, constructor or type in the graph with no note; test code excluded unless `--tests`). Q&A threads live with their note version, so a thread on a stale note is reported as `questions_stale`. `regenerate` orders the stale symbols callee first (a depth-first walk over the graph's call links, cycle-safe). Fresh notes are reused untouched, so a tour or an answer regenerates only what the report names.
 
+`code-tour ast --stale [--limit N]` turns the report into a tour: the `regenerate` symbols become the entries (several entries are allowed, §9.1), so the outline lists exactly the boxes to rewrite, callee first. It prints `nothing stale` when every note matches the code, and notes how many symbols remain when the limit cut the list. The agent still writes the route and the explanations.
+
 ## 16. Commands, RPC and options
 
 | CLI | RPC | Does |

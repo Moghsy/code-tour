@@ -1,5 +1,5 @@
 -- Python Tree-sitter backend. Symbols are scoped by module and lexical owner.
-local M = { name = "python", parser = "python", extensions = { ".py" }, version = 2 }
+local M = { name = "python", parser = "python", extensions = { ".py" }, version = 4 }
 
 local function set(items)
   local out = {}
@@ -126,7 +126,7 @@ local function parameters(node, src)
 end
 
 local function decorators(node, src)
-  local annotations, mods = {}, {}
+  local annotations, mods, args = {}, {}, {}
   for _, decorator in ipairs(children(node, "decorator")) do
     local expression = decorator:named_child(0)
     local name = text(field(expression, "function") or expression, src)
@@ -134,9 +134,13 @@ local function decorators(node, src)
     if short then
       annotations[#annotations + 1] = name
       mods[short] = true
+      local list = field(expression, "arguments")
+      if list then
+        args[short] = text(list, src) -- "(init=False)", read by synth rules
+      end
     end
   end
-  return annotations, mods
+  return annotations, mods, args
 end
 
 local function entry_decorator(annotations)
@@ -192,13 +196,13 @@ function M.declarations(file, root, src)
     for name, id in pairs(class.fields) do
       local f = facts.symbols[id]
       if f and f.annotated and not f.class_var then
-        fields[#fields + 1] = { name = name, type = f.type, default = f.default, line = f.range.start[1],
-          annotations = {}, args = {} }
+        fields[#fields + 1] = { name = name, type = f.type, default = f.default, init_false = f.init_false,
+          line = f.range.start[1], annotations = {}, args = {} }
       end
     end
     table.sort(fields, function(a, b) return a.line < b.line end)
     local specs = require("code-tour.ast.synth").specs(M.name, { name = class.name, qname = class.qname,
-      kind = "class", annotations = class.annotations, args = {}, fields = fields })
+      kind = "class", annotations = class.annotations, args = class.annotation_args or {}, fields = fields })
     for _, spec in ipairs(specs) do
       local id = class.id .. "." .. spec.name
       if spec.kind == "constructor" and not facts.symbols[id] then
@@ -235,13 +239,13 @@ function M.declarations(file, root, src)
         local class = kind == "class_definition"
         local name = kind == "if_statement" and "$main" or text(field(node, "name"), src)
         local qname = (scope and scope.qname or module) .. "." .. name
-        local annotations, modifiers = decorators(child, src)
+        local annotations, modifiers, decorator_args = decorators(child, src)
         local body = field(node, "body") or field(node, "consequence")
         local sym = { id = "python:" .. qname, kind = class and "class"
           or (name == "__init__" and scope and scope.kind == "class" and "constructor" or "method"),
           name = name, qname = qname, label = scope and (scope.name .. "." .. name) or name,
           owner = scope and scope.id or file_id, range = range(child), error = node:has_error(),
-          annotations = annotations, modifiers = modifiers, bindings = {} }
+          annotations = annotations, annotation_args = decorator_args, modifiers = modifiers, bindings = {} }
         if name == "$main" then
           sym.label = "__main__ guard"
         end
@@ -299,6 +303,7 @@ function M.declarations(file, root, src)
             file = file, owner = scope.id, range = range(assignment), source = "ast", static = true,
             type = type_ref(annotated, src), annotated = annotated ~= nil or nil,
             default = field(assignment, "right") ~= nil or nil,
+            init_false = (field(assignment, "right") and text(field(assignment, "right"), src):match("init%s*=%s*False")) and true or nil,
             class_var = spelled and (spelled:match("^ClassVar") or spelled:match("%.ClassVar")) and true or nil }
         end
       end
@@ -480,8 +485,13 @@ function M.bodies(_, src, facts, pending)
         return site and { k = "call", site = site.id, name = site.name, arity = site.arity } or { k = "other" }
       elseif kind == "parenthesized_expression" or kind == "await" or kind == "keyword_argument" then
         return describe(field(node, "value") or node:named_child(0))
-      elseif kind == "string" or kind == "integer" or kind == "float" or kind == "true" or kind == "false" then
-        local literal = { string = "str", integer = "int", float = "float", ["true"] = "bool", ["false"] = "bool" }
+      elseif kind == "string" or kind == "integer" or kind == "float" or kind == "true" or kind == "false"
+          or kind == "list" or kind == "dictionary" or kind == "set" or kind == "tuple"
+          or kind == "list_comprehension" or kind == "dictionary_comprehension" or kind == "set_comprehension"
+          or kind == "concatenated_string" then
+        local literal = { string = "str", concatenated_string = "str", integer = "int", float = "float",
+          ["true"] = "bool", ["false"] = "bool", list = "list", list_comprehension = "list", dictionary = "dict",
+          dictionary_comprehension = "dict", set = "set", set_comprehension = "set", tuple = "tuple" }
         return { k = "lit", type = literal[kind] }
       end
       return { k = "other" }
@@ -1088,6 +1098,10 @@ local function member(r, t, name)
   return unknown
 end
 
+local builtin_values = { str = "str", int = "int", float = "float", bool = "bool", bytes = "bytes", list = "list",
+  dict = "dict", set = "set", frozenset = "set", tuple = "tuple", sorted = "list", len = "int", repr = "str",
+  format = "str", range = "range", enumerate = "enumerate", zip = "zip", reversed = "list" }
+
 local function resolved_value(r, s, ctx)
   if not s then
     return unknown
@@ -1099,6 +1113,14 @@ local function resolved_value(r, s, ctx)
     end
   elseif s.name == "super" and s.unresolved == "builtin" and s.arity == 0 and ctx.type and ctx.type.methods then
     return { kind = "project", sym = ctx.type, name = ctx.type.qname, via = "super", instance = true, super = true }
+  end
+  -- a call of a builtin type (`set()`, `str(x)`, `sorted(y)`) is a builtin value; a call into a
+  -- library (`Path(x)`, `os.path.join(...)`) is a library value, so methods called on it are not "dynamic"
+  if s.unresolved == "builtin" and builtin_values[s.name] then
+    return { kind = "builtin", name = builtin_values[s.name] }
+  elseif s.unresolved == "library" then
+    local full = s.receiver_type and s.library_name and (s.receiver_type .. "." .. s.library_name) or s.name
+    return { kind = "library", name = full }
   end
   local targets = s.targets or {}
   local sym = #targets == 1 and r.idx:symbol(targets[1].symbol)

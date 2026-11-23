@@ -75,6 +75,15 @@ local function test()
     "    def norm(self):",
     "        return self.x",
     "",
+    "@dataclass(init=False)",
+    "class NoInit:",
+    "    a: int",
+    "",
+    "@dataclass",
+    "class Hidden:",
+    "    a: int",
+    "    b: int = field(init=False, default=0)",
+    "",
     "@dataclass",
     "class Own:",
     "    a: int",
@@ -82,9 +91,17 @@ local function test()
     "        self.a = 1",
     "",
     "def build():",
+    "    items = []",
+    "    items.append(1)",
+    "    seen = set()",
+    "    seen.add(2)",
+    "    words = sorted(items)",
+    "    words.sort()",
     "    p = Point(1, y=2)",
     "    q = Point()",
     "    r = Own()",
+    "    h = Hidden(1)",
+    "    n = NoInit()",
     "    p.norm()",
     "    return p",
   }, root .. "/shapes.py")
@@ -94,8 +111,14 @@ local function test()
   t.eq(shapes.symbols["python:shapes.Point.__init__"].synthetic, "dataclass", "the constructor is marked synthetic")
   t.eq(#shapes.symbols["python:shapes.Point.__init__"].params, 4, "self plus x, y and tags; ClassVar is not a parameter")
   t.eq(t.targets(t.site(build, "Point", 2)), {}, "a call missing a required field does not bind")
+  t.eq(t.targets(t.site(build, "Hidden")), { "python:shapes.Hidden.__init__" }, "field(init=False) is not a parameter")
+  t.eq(#shapes.symbols["python:shapes.Hidden.__init__"].params, 2, "self and a only")
+  t.eq(shapes.symbols["python:shapes.NoInit.__init__"], nil, "@dataclass(init=False) generates no constructor")
   t.eq(t.targets(t.site(build, "Own")), { "python:shapes.Own.__init__" }, "a written __init__ is kept")
   t.eq(shapes.symbols["python:shapes.Own.__init__"].synthetic, nil, "and is not replaced")
+  t.eq(t.site(build, "items.append").unresolved, "builtin", "a method on a list literal is a builtin call")
+  t.eq(t.site(build, "seen.add").unresolved, "builtin", "a method on set() is a builtin call")
+  t.eq(t.site(build, "words.sort").unresolved, "builtin", "a method on sorted(...) is a builtin call")
   t.eq(t.targets(t.site(build, "p.norm")), { "python:shapes.Point.norm" }, "the instance carries its class")
   vim.fn.writefile({ "def work():", "    return 1" }, root .. "/first.py")
   vim.fn.writefile({ "def work():", "    return 1" }, root .. "/second.py")

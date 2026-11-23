@@ -45,6 +45,8 @@ t.finish("ast analysis", function()
   local near = view("neighbors", { symbol = "OrderService#checkout" })
   check(near.symbol:find("OrderService#checkout", 1, true), "neighbors resolves a partial id: " .. near.symbol)
   check(#near.callees > 0 and near.callees[1].confidence, "callees carry their confidence")
+  local test_near = view("neighbors", { symbol = "Money#format" })
+  check(test_near.callers and #test_near.callers > 0, "a hub has callers")
   check(not pcall(view, "neighbors", { symbol = "NoSuchThing" }), "an unknown symbol is an error")
 
   local path = root .. "/src/main/java/shop/order/OrderService.java"

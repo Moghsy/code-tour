@@ -214,6 +214,9 @@ M.builtin = {
 -- fields are not parameters.
 M.builtin.python = {
   dataclass = function(type)
+    if type.args and type.args.dataclass and type.args.dataclass:match("init%s*=%s*False") then
+      return {} -- @dataclass(init=False): the class writes (or inherits) its own constructor
+    end
     local params = {}
     for _, f in ipairs(type.fields) do
       if not f.static_var and not f.init_false then

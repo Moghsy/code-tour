@@ -248,7 +248,8 @@ function M.neighbors(graph, symbol)
   local callers, callees = {}, {}
   for _, e in ipairs(graph.links) do
     if e.relation == "calls" then
-      local item = { confidence = e.confidence, via = e.via, file = e.source_file, at = e.source_location, text = e.callsite }
+      local item = { confidence = e.confidence, via = e.via, file = e.source_file, at = e.source_location, text = e.callsite,
+        test = is_test({ source_file = e.source_file }) or nil }
       if e.source == node.id then
         callees[#callees + 1] = vim.tbl_extend("force", item, { symbol = e.target })
       elseif e.target == node.id then

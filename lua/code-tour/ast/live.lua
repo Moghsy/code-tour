@@ -81,6 +81,15 @@ local function reopen(idx, saved, entries, through, overrides)
   local current_through = current(through)
   local ops = vim.deepcopy(overrides)
   for _, op in ipairs(ops) do
+    -- a route edge follows a renamed symbol the way an entry does: by the fingerprint saved with the recipe
+    if op.kind == "route" then
+      for _, key in ipairs({ "from", "to" }) do
+        if not rt:resolve_entry(op[key]) then
+          local evidence = (saved.symbols or {})[op[key]]
+          op[key] = evidence and old_symbol(idx, evidence) or op[key]
+        end
+      end
+    end
     local replacement = remapped[op.symbol]
     if replacement then
       for _, key in ipairs({ "address", "second" }) do
@@ -451,6 +460,19 @@ function L:remember()
     local sn = self.snippets[self.ids[id]]
     if sym and (not sn or not self:changed(sn)) then
       recipe.symbols[id] = { fingerprint = relocation(self.idx, sym), kind = sym.kind, file = sym.file }
+    end
+  end
+  -- route endpoints keep the same evidence, so a rebuild after a rename can find them again
+  local resolver = require("code-tour.ast.route").new(self.idx)
+  for _, op in ipairs(recipe.overrides or {}) do
+    if op.kind == "route" then
+      for _, key in ipairs({ "from", "to" }) do
+        local ids = resolver:resolve_entry(op[key])
+        local sym = ids and #ids == 1 and self.idx:symbol(ids[1])
+        if sym and sym.range and not sym.implicit then
+          recipe.symbols[op[key]] = { fingerprint = relocation(self.idx, sym), kind = sym.kind, file = sym.file }
+        end
+      end
     end
   end
   recipe.id = recipe.id or vim.fn.sha256(vim.json.encode({ recipe.entries, recipe.through, recipe.auto or false })):sub(1, 16)

@@ -585,6 +585,37 @@ class AstDryRunTests(unittest.TestCase):
         self.assertIn('sink: s9 http.send (HttpClient)', proc.stdout)
         self.assertIn('s11 order.markPaid [9 not in the route]', proc.stdout)
 
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(CLI), *args, '--project', str(self.root)],
+                              capture_output=True, text=True, env=self.env, timeout=300)
+
+    def test_analyze_and_concepts(self):
+        proc = self.run_cli('analyze', 'communities', '--limit', '3')
+        self.skip_without_parser(proc)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertGreaterEqual(len(json.loads(proc.stdout)['communities']), 1)
+        self.assertTrue((self.root / '.code-tour/graph.json').is_file(), 'the graph is persisted')
+        proc = self.run_cli('analyze', 'gods', '--limit', '2')
+        self.assertEqual(len(json.loads(proc.stdout)['hubs']), 2)
+        proc = self.run_cli('analyze', 'neighbors', 'OrderService#checkout')
+        self.assertTrue(json.loads(proc.stdout)['callees'])
+        proc = self.run_cli('concept', 'add', 'Order totalling', '--members', 'Order#total', '--summary', 'Sums the lines.')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)['id'], 'order-totalling')
+        listed = json.loads(self.run_cli('concept', 'list').stdout)['concepts']
+        self.assertEqual([c['name'] for c in listed], ['Order totalling'])
+        self.assertTrue(json.loads(self.run_cli('concept', 'remove', 'order-totalling').stdout)['removed'])
+
+    def test_route_flags_are_validated(self):
+        proc = self.ast('OrderService#checkout', '--dry-run', '--walk', 'no arrow')
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("expects 'CALLER -> CALLEE'", proc.stderr)
+        proc = self.ast('OrderService#checkout', '--dry-run', '--walk', 'OrderService#checkout -> Order#total',
+                        '--branch', 'OrderService#checkout -> Money#format@3')
+        self.skip_without_parser(proc)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('route OrderService#checkout -> Money#format: no resolved call', proc.stdout)
+
     def test_json_and_detail(self):
         proc = self.ast('Pipeline', '--dry-run', '--json', '--detail', 'overview', route='pipeline')
         self.skip_without_parser(proc)

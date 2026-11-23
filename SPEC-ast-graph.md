@@ -40,8 +40,8 @@ The design borrows from two tools that turn code into graphs, and departs from e
 | One central graph per repository, updated incrementally | the note store (§11) |
 | Scoring likely entry points (file names, depth, fan-in/fan-out) | entry-free tours (§8.1) |
 | Checking a graph against the git commit it was built from, then per-file fingerprints | the store's quick checks (§11.3) |
-| Per-node metrics such as complexity feeding later decisions | metrics drive the route (§8.4) |
-| Optional hints from an existing graph | `.ua/` and graphify imports (§6.2) |
+| Per-node metrics such as complexity feeding later decisions | metrics only choose the model for a box (§8.4); the agent chooses the route (§8.3) |
+| Optional hints from an existing graph | not used; the plugin keeps its own graph and concepts (§15) |
 
 | Rejected | Why | Instead |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ A symbol is a declaration: file, type, method, constructor, field.
 | `abstract` | method only: no body |
 | `returns` | method only: declared return type name |
 | `metrics` | method only: `{lines, statements, branches, loops, sites, project_sites, field_writes, throws}` |
-| `source` | `ast`, `library` (§4.4), `agent` (fallback, §14) or `hint` (§6.2) |
+| `source` | `ast`, `library` (§4.4) or `agent` (fallback, §14) |
 
 ### 3.2 Regions
 
@@ -128,7 +128,7 @@ Every edge carries:
 | Field | Values |
 | --- | --- |
 | `confidence` | `EXTRACTED` (the syntax and declared types prove it, through the language's scoping rules, in this file or another), `INFERRED` (some step was heuristic: a unique project name, rule 7 of §5.2; name-only matching; dispatch; an agent edge), `AMBIGUOUS` (several candidates kept) |
-| `via` | how it was resolved: `local`, `param`, `field`, `this`, `super`, `static`, `import`, `package`, `chain`, `dispatch`, `declared` (the export's edge to an abstract method a call names, §15), `name-only`, `lsp`, `agent` |
+| `via` | how it was resolved: `local`, `param`, `field`, `this`, `super`, `static`, `import`, `package`, `chain`, `dispatch`, `declared` (the export's edge to an abstract method a call names, §15), `boundary` (a configured cross-boundary edge, §5.6), `lsp`, `agent` |
 | `source` | `ast`, `lsp`, `agent`, `hint` |
 
 The agent may add edges the syntax tree cannot see (dependency injection, event buses, reflection, framework callbacks) through `--edge` (§9.6). They carry `source: agent, confidence: INFERRED` and can be walked like any other.
@@ -351,14 +351,9 @@ Until anything framework-specific exists, such links appear as gaps (§8.3), and
 
 Computed in pass 2, no LLM: `lines`, `statements`, `branches`, `loops`, `sites`, `project_sites`, `field_writes`, `throws`. They feed the route's importance score (§8.4) and the agent outline.
 
-### 6.2 Hints from other graphs
+### 6.2 Other graphs
 
-If the repository already has a graph, it can inform (never replace) the heuristics:
-
-- **Understand Anything** (`.ua/knowledge-graph.json` or `.understand-anything/`): a node's `summary` is offered to the agent beside the snippet; `complexity: complex` adds to the importance score.
-- **graphify** (`graphify-out/graph.json`): community membership lets the route prefer callees in the entry's community when the budget is tight; god nodes are never walked automatically (they are hubs, rarely the point of a tour).
-
-Hints require a graph commit that resolves to the current HEAD and clean relevant source on disk and in loaded buffers. An invalid or stale graph produces a warning in the outline.
+The plugin reads no other tool's graph and takes no hints from one. The knowledge the agent needs comes from the project graph the plugin itself persists (`.code-tour/graph.json`, §15) and the lazy views over it (`code-tour analyze`: communities, hubs, crossings, neighbors). Agent-written concepts (§15.2) add the semantic layer.
 
 ## 7. Where explanations attach: region selection
 
@@ -431,74 +426,52 @@ Depth-first from each entry, visiting sites in evaluation order. Some sites get 
 | target on the current path, or already visited | `ref`, why "already shown" |
 | same target already reached from this symbol | `ref` |
 
-Every other site gets a **rating**, an integer where 0 is the most important:
+Every other site gets a **rating** from the agent's route (§8.3) and nowhere else, an integer where 0 is the main walk:
 
-| Condition, in order | Rating |
+| Condition | Rating |
 | --- | --- |
-| target is trivial (below) | 9, why "accessor" / "setter" / "factory" / "delegates to X" |
-| site is on the main flow (§8.3) | 0 |
-| target is library code (planned with §4.4) | by score as below, but at least 3, why "library" |
-| deeper than 8 | 9, why "beyond depth" |
-| otherwise, by the depth-adjusted score `s′` (§8.4) | `s′ ≥ 6` → 1, `≥ 4` → 2, `≥ 3` → 3, `≥ 2` → 4, else 5 |
+| the route names the call (`from → to`, optionally limited to one call by `site`) | its `level`, 0 to 5 |
+| `--rate nK.sJ=N` (§9.6) | N |
+| otherwise | 9, why "not in the route" |
 
-Rating 0 is reserved for the main flow; a score alone never reaches it. `N = 5` is the largest rating any cutoff reaches (§8.6). 9 lies above every cutoff, so trivial calls are always lazy, even on the main flow.
+The plugin never scores a call. 9 lies above every cutoff, so a call the route does not name is always lazy: the reader can open it, but nothing offers it. `N = 5` is the largest rating any cutoff reaches (§8.6).
 
 **Effective rating** = the larger of a site's own rating and the effective rating of the edge that reached its symbol. A call can never rank above the call that leads to it, so every cutoff produces a connected tree, and no gold call sits beneath a red one.
 
 `AMBIGUOUS` sites, and sites with several implementations (§8.5), are rated like any other, but their mode is at most `optional`: the reader chooses the candidate.
 
-**Trivial**: one statement, no branches, at most 4 lines, and one of: returns a field, parameter or literal; assigns one field; a constructor that only assigns fields; `return new T(…)`; forwards its parameters to one call (a delegate, whose target is rated in its place, one hop).
+### 8.3 The route: the agent decides the flow
 
-### 8.3 The main flow
+The **main flow** is the vital path through the code from the entry to its end: the calls without which the entry would not do what it exists to do. **The agent chooses it.** It studies the project graph and the code (§1 steps 1–2), then supplies the route as edges:
 
-The **main flow** is the vital path, or paths, through the code from the entry to its end: the calls without which the entry would not do what it exists to do, and therefore the path that answers the user's question. Its sites, and only they, are rated 0. **The main flow is always walked and always explained in full, at every detail.** Helpers, utilities and side branches are extras: offered or left lazy according to detail (§8.6). Zooming to level 0 (`a-`) shows exactly the main flow.
+```json
+[{"from": "OrderService#checkout", "to": "Order#total", "level": 0},
+ {"from": "OrderService#checkout", "to": "Notifier#send", "level": 3, "site": "email.send"}]
+```
 
-**Success path.** Main sites are sought only on each method's success path. A statement is off it when it lies in:
+`from` and `to` are symbol specs (§8.1); `level` 0 is the main walk, 1 to 5 are optional branches, offered by detail (§8.6); `site` limits an edge to the one call written as that text. The route is passed as `--route FILE`, `--walk 'A -> B'` and `--branch 'A -> B@N'`, on `ast`, `adjust`, `flow` and `explain`; it is stored in the recipe and re-applied on every rebuild, and its endpoints follow a renamed symbol like entries do (§11.5). An edge that matches no resolved call is a warning. Naming a concrete implementation settles a dispatch among several (§8.5). `--through SYMBOL` is a helper that routes the shortest call path from the entry to a symbol at level 0.
 
-- the consequence of a guard (§4.2);
-- a `catch` clause, or an arm that ends in `throw`;
-- of two arms that both terminate (each returns or throws), the arm with fewer project sites; on a tie, the arm taken when the condition signals failure (a negation, `== null`, `isEmpty`, or a name containing `fail`, `error`, `invalid` or `denied`);
-- in a `switch`, every case but the one with the most project sites.
+**The main flow is always walked and always explained in full, at every detail.** `ast.main_cap` (default 40 main snippets) bounds it as protection against pathological routes: past the cap, the tour warns and the remaining main sites become `lazy`, why "main cap".
 
-When the name-based tie-break decides, or no rule decides, the outline lists the **fork** (`fork:`), so the agent can confirm it or correct it with `--rate` (§9.6). Failure paths are offered, not walked; the error walk (§8.7) is their eventual home.
+The plugin still reports **facts** about the code the route walks:
 
-**Main sites.** In a symbol on the main flow (the entry, or the target of a main site), a site on the success path is main when its target is not trivial and either:
+- **Success path and forks.** For region selection (§7) the plugin knows which statements lie on a method's success path (outside guard consequences, `catch` clauses, terminating arms and all but one `switch` case); where a name-based tie-break decided, the outline lists the **fork** (`fork:`).
+- **Sinks.** A library call that leaves the program's memory, listed per backend (`backend.sinks`), is a leaf, listed in the outline (`sink:`).
+- **Gaps.** A routed call the code cannot follow: unresolved, abstract with no implementation, several implementations without a named one or a known construction (§8.5), or a **hand-off** (`backend.handoffs`, such as an executor or event publisher). The outline lists each (`gap: s3 bus.publish — target unknown`), the header counts them, and an agent edge (`--edge`, §9.6) or a configured boundary (`ast.boundaries`) closes one.
 
-1. it is a **carrier**: its value reaches the method's result. The call is part of the `return` expression, or its value is assigned to a local that reaches the result, or it is passed as an argument to another carrier, followed through locals within the method; or
-2. its target **has an effect**: it writes a field of `this` or of a parameter, contains a sink site, or contains a success-path site whose target has an effect. This is computed bottom-up, with memoization and a cycle guard.
+A tour without a route shows only its entry; every call is lazy until the agent names it.
 
-A `void` entry has no carriers, so its main flow consists of its effects. A symbol on the main flow with no main sites is where that strand of the flow ends.
+### 8.4 Complexity
 
-Example: in `checkout`, `order.total` (s3) feeds `discounts.apply` (s4), which feeds `gateway.charge` (s5), whose result feeds `receipt` (s9), which is returned. All four are carriers, so the main flow is s3 → s4 → s5 → s9. `Order.markPaid` (s8) has an effect but is trivial (a setter), so it stays lazy; the outline marks it `main`, so its role isn't lost. The guards in `r1`, and the `!result.ok()` arm of `r4`, are off the success path.
-
-**Ends.** The main flow ends:
-- where it returns to the entry's caller;
-- at a symbol with no main sites;
-- at a **sink**: a library call that leaves the program's memory, listed per backend (`backend.sinks`). Sinks are leaves, listed in the outline (`sink:`).
-
-**Gaps.** Sometimes the main flow cannot be followed:
-- a carrier or effect site is unresolved for a reason other than `library`;
-- the site has several implementations and no known construction (§8.5);
-- the site is a **hand-off** (`backend.handoffs`), such as an event publisher or an executor, which passes control to code the syntax tree cannot see;
-- the link is made by a framework (§5.6).
-
-The tour then never claims to be complete. The outline lists each gap (`gap: s3 bus.publish — target unknown`), the header counts them, and an agent edge (`--edge`, §9.6) closes one.
-
-**Completeness.** The main flow is exempt from the budget and from depth limits, and does not count against the budget. Only `ast.main_cap` (default 40 main snippets) bounds it, as protection against pathological flows: past the cap, the tour warns, and the remaining main sites become `lazy`, why "main cap".
-
-### 8.4 Importance
+The plugin does compute one number, and uses it only to tell the agent which model should write a box (§9.7), never to choose what the tour shows:
 
 ```
 score = min(lines, 40) / 5  + 2 × branches + 1.5 × loops + 1.5 × project_sites
       + 2 × field_writes + 1 (throws or catches)
       − 2 (named log/debug/trace/print*/toString/equals/hashCode)
-      − 2 (reached only by name-only resolution)
-      + 2 (Understand Anything rates it complex, §6.2)
-
-s′ = score / (1 + depth)        depth: 0 for the entry's own sites, 1 for its callees' sites, …
 ```
 
-Example: `Order.total()` has 7 lines (1.4), one loop (1.5) and one project site (1.5), so `score = 4.4`. Called from the entry, `s′ = 4.4`, which alone would rate it 2. It is a carrier in `checkout`, though, so it is on the main flow and rated 0 (§8.3). The rating bands are tunable (`ast.rating_bands`).
+Example: `Order.total()` has 7 lines (1.4), one loop (1.5) and one project site (1.5), so `score = 4.4`.
 
 ### 8.5 Dispatch on the route
 
@@ -518,8 +491,8 @@ Detail never changes the main flow. It decides two things: **which extras are of
 | detailed | 4 | 30 | groups of about 6 lines | one or two paragraphs |
 | exhaustive | 5 | 80 | groups of about 5 lines, every multi-arm statement split | as long as needed, line by line where it matters |
 
-- **Mode**: rating 0 (the main flow) → `walk`; rated ≤ the offer cutoff → `optional`; otherwise `lazy`, why "detail" (or the trivial or depth reason). Gold therefore means the main flow, and only the main flow, at every detail.
-- **Budget**: the budget limits extras only. When offered snippets exceed it, they are ordered by effective rating, then by `−s′`, and those past the budget become `lazy`, why "budget". The final snippet order is still walk order.
+- **Mode**: rating 0 (the main flow) → `walk`; rated ≤ the offer cutoff → `optional`; otherwise `lazy`, why "detail" (or "not in the route"). Gold therefore means the main flow, and only the main flow, at every detail.
+- **Budget**: the budget limits extras only. When offered snippets exceed it, they are ordered by effective rating, then by walk order, and those past the budget become `lazy`, why "budget". The final snippet order is still walk order.
 - **Zoom**: each call's `level` is its effective rating, and `a-` folds calls above the zoom level, as today. Level 0 is the main flow.
 - **Changing detail** on a live tour (§10) moves the offer cutoff only; ratings are not recomputed and the main flow stays put. Boxes are refined or coarsened along nested boundaries (§7), and each box shows its body for the new level from the store, or the nearest level while that one is written (§11.2).
 - The cutoffs are tunable (`ast.cutoffs`).
@@ -580,7 +553,6 @@ Grammar:
 - **Site lines** follow their region, grouped by mode: `walk:`, `optional:`, `lazy:`, `accessor:`, `unresolved:`, `ambiguous:`, each site as `sN text → nM [rating]` (when routed to a snippet), with the lazy reason inside the brackets and a parenthesized note where resolution was not direct. `★` marks the main flow.
 - **Main-flow lines** (§8.3) follow the same layout: `sink:` (where the flow ends), `gap:` (where it could not be followed, with the reason), and `fork:` (a success-path choice the agent should confirm).
 - Lines and paths in the outline are for reading only. The agent never sends them back.
-- Hints from other graphs (§6.2) appear as `hint: "…"` lines under the snippet.
 
 ### 9.3 Writing notes
 
@@ -751,7 +723,7 @@ A change confined to a method body is never treated as cosmetic, as Understand A
 
 ### 11.5 Tour history
 
-`tours.json` keeps recent recipes with entries, detail, through-symbols, overrides and the last-opened time. `:CodeTourHistory [id]` lists or opens those recipes for the current repository. Reopening reruns the recipe and uses stored fingerprints to recover a uniquely matching renamed entry. Missing entries are reported and surviving entries still open. Agent-supplied ranges retain a line hint and a relocation fingerprint. Tours authored entirely as stops keep the existing save format in SPEC-old.md.
+`tours.json` keeps recent recipes with entries, detail, through-symbols, overrides and the last-opened time. `:CodeTourHistory [id]` lists or opens those recipes for the current repository. Reopening reruns the recipe and uses stored fingerprints to recover a uniquely matching renamed entry or route endpoint. Missing entries are reported and surviving entries still open. Agent-supplied ranges retain a line hint and a relocation fingerprint. Tours authored entirely as stops keep the existing save format in SPEC-old.md.
 
 ### 11.6 Pruning
 
@@ -829,20 +801,25 @@ When a symbol has no backend or parser, pass a JSON range via `code-tour ast --a
 - A tour can contain only `--add` entries. The existing stop-based authoring workflow also supports wholly agent-authored tours and exports agent provenance for their boxes.
 - An agent-supplied snippet has no sites of its own unless the agent lists them (`"sites": [{"text": "client.post", "line": 14, "target": "…"}]`).
 
-## 15. Exports
+## 15. The project graph, analysis and concepts
 
-`code-tour codegraph [--project DIR] [--out PATH] [--pane P]` writes the symbol graph as graphify-compatible node-link JSON (a directed multigraph): `id`, `label`, `file_type: "code"`, `source_file`, `source_location` (`L15-33`) on nodes; `relation`, `confidence`, `source_file`, `source_location`, `weight` on edges. Each site becomes a `calls` edge from its symbol to each target with `key = site id`, `callsite` and `via`, plus one with `via: declared` to the abstract method it names, if any (§5.4), so callers of an interface method can be found; the export loads with graphify's `build_from_json` and merges with graphify's own extraction by file path.
+### 15.1 The persisted graph
 
-- Every node and edge carries `_origin: "ast"`, graphify's mark for deterministic extraction; without it graphify treats nodes whose location spans lines as LLM output and re-keys them.
-- §3.4's edge field `source` is exported as `origin`, since node-link uses `source` for the edge's endpoint.
-- graphify builds a simple graph, so it keeps one edge per pair of nodes: repeated sites between the same caller and callee survive only in the exported JSON.
-- Without `--pane` the command runs Neovim headless; with it, the editor's unsaved buffers count. The default output is `$TMPDIR/code-tour-UID/codegraph.json`.
+`code-tour codegraph [--project DIR] [--out PATH] [--rebuild] [--pane P]` writes the resolved symbol graph to `.code-tour/graph.json` (kept out of git like the notes) as node-link JSON (a directed multigraph): `id`, `label`, `file_type: "code"`, `source_file`, `source_location` (`L<n>` or `L<a>-<b>`), `kind`, `signature`, `metrics` for bodies; links are the relations of §3.4, each call site its own `calls` link keyed by site id with `confidence`, `via`, `callsite`, `call_range` and `origin`. The graph carries a **manifest** (each file's hash, the language set, the boundary rules and the synthesizer names); a request reuses the file while the manifest matches and rebuilds otherwise, re-extracting only changed files because facts are cached by blob SHA. `--out` writes elsewhere. Without `--pane` the command runs Neovim headless; with it, the editor's unsaved buffers count.
+
+Members generated at build time (Lombok `@Builder`, `@Getter`, `@Setter`, `@Data`, `@Value`, constructors) are synthesized from annotations (`ast/synth.lua`, user rules in `ast.synthesizers`) as implicit symbols, and `ast.boundaries` binds calls the language cannot follow. A call is never bound by its bare name.
+
+### 15.2 Analysis and concepts
+
+`code-tour analyze VIEW` computes lazily over the graph and caches in `analysis.json` under the manifest hash: `communities` (label propagation over containment, calls, inheritance and references; named by dominant package and type), `gods` (the symbols with the most distinct callers and callees), `crossings` (calls between communities, grouped by pair) and `neighbors SYMBOL` (callers and callees with `confidence`, `via` and the symbol's concepts). These are facts about the graph's shape, never a ranking of importance.
+
+`code-tour concept add NAME --members SYMBOL… [--summary TEXT]`, `concept list` and `concept remove ID` keep **concepts**, the semantic layer: the agent names an idea and the symbols that implement it while it explains code. A concept is a hyperedge over the graph stored in `concepts.json`; each member keeps a fingerprint of its source, so a concept turns stale member by member when the code changes (`fresh`, `stale`, `missing`). The plugin extracts nothing semantic itself. `analyze concepts` lists them.
 
 ## 16. Commands, RPC and options
 
 | CLI | RPC | Does |
 | --- | --- | --- |
-| `code-tour ast ENTRY… [--through SYMBOL…] [--detail D] [--auto] [--json] [--dry-run] [--rate/--split/--merge/--edge/--add …]` | `ast_tour(request)` | build, show the skeleton, return the outline |
+| `code-tour ast ENTRY… [--route FILE] [--walk/--branch EDGE…] [--through SYMBOL…] [--detail D] [--auto] [--force] [--json] [--dry-run] [--rate/--split/--merge/--edge/--add …]` | `ast_tour(request)` | build, show the skeleton, return the outline |
 | `code-tour --fill N --tour T [--detail D] [--model M]` | `fill(id, payload, opts)` | for AST snippets, attach notes (§9.3) and write them to the store |
 | `code-tour brief N --tour T` | `ast_brief(id, tour)` | one snippet's brief for a subagent (§9.7) |
 | `code-tour adjust --tour T [--detail D] …` | `ast_adjust(ops)` | change detail, or apply overrides, on a live tour |
@@ -851,7 +828,9 @@ When a symbol has no backend or parser, pass a JSON range via `code-tour ast --a
 | `code-tour note SYMBOL FILE [--detail D] [--model M]` | `know("note", opts)` | write back an explanation (§13.3) |
 | `code-tour scenario BOX FILE --tour T` | `ast_scenario(opts)` | run a scratch Java scenario for a pending question (§12.2) |
 | `code-tour agent install/uninstall` | | the `CLAUDE.md`/`AGENTS.md` section (§13.2) |
-| `code-tour codegraph [--project DIR] [--out PATH] [--pane P]` | `code_graph(opts)` | export (§15) |
+| `code-tour codegraph [--project DIR] [--out PATH] [--rebuild] [--pane P]` | `code_graph(opts)` | write or reuse the persisted graph (§15.1) |
+| `code-tour analyze communities\|gods\|crossings\|neighbors SYMBOL\|concepts` | `analyze(opts)` | lazy graph analysis (§15.2) |
+| `code-tour concept add\|list\|remove …` | `concepts(opts)` | agent-authored concepts (§15.2) |
 | `:CodeTourAst [entry] [detail]` or `:CodeTourAst --auto [detail]` | | editor-initiated tour or entry picker (§9.5) |
 | `:CodeTourDetail {detail}` | | change detail on the current tour (§10) |
 | `:CodeTourHistory [id]` | | open an AST recipe from the repository history |
@@ -865,7 +844,8 @@ When a symbol has no backend or parser, pass a JSON range via `code-tour ast --a
 | `ast.languages` | `{"java"}` | backends to use |
 | `ast.detail` | `"normal"` | default detail |
 | `ast.max_files` | `5000` | full-scan cap |
-| `ast.hints` | `true` | read `.ua/` and `graphify-out/` graphs (§6.2) |
+| `ast.boundaries` | `{}` | cross-boundary edges `{call, to}` that continue a call the language cannot follow (§5.6) |
+| `ast.synthesizers` | `{}` | rules for members generated at build time (Lombok and the like), per language |
 | `ast.ignore` | `{}` | extra paths to remove from git's file list (§4.3) |
 | `ast.cutoffs` | the table in §8.6 | offer cutoff and budget per detail |
 | `ast.main_cap` | `40` | most main-flow snippets in a tour (§8.3) |

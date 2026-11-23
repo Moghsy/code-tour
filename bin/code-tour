@@ -595,7 +595,7 @@ def codegraph_main(argv):
 def analyze_main(argv):
     parser = argparse.ArgumentParser(prog='code-tour analyze',
         description='Lazy views over the persisted project graph: communities, hub symbols, community crossings, neighbors')
-    parser.add_argument('view', choices=('communities', 'gods', 'crossings', 'neighbors'))
+    parser.add_argument('view', choices=('communities', 'gods', 'crossings', 'neighbors', 'concepts'))
     parser.add_argument('symbol', nargs='?', help='neighbors: the symbol id, label or a part of its id')
     parser.add_argument('--limit', type=int, default=15)
     parser.add_argument('--members', action='store_true', help='communities: list every member symbol')
@@ -619,6 +619,47 @@ def analyze_main(argv):
         result = rpc(target['address'], 'return require("tour").analyze(...)', [request], timeout=120)
     else:
         result = headless('analyze', dict(request=json.dumps(request)))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def concept_main(argv):
+    parser = argparse.ArgumentParser(prog='code-tour concept',
+        description='Agent-authored concepts: a named idea grouping the symbols that implement it (the semantic layer)')
+    commands = parser.add_subparsers(dest='command', required=True)
+    adding = commands.add_parser('add', help='Record or replace a concept')
+    adding.add_argument('name')
+    adding.add_argument('--members', nargs='+', required=True, metavar='SYMBOL', help='Symbol specs (types expand to their methods)')
+    adding.add_argument('--summary', help='One or two sentences saying what the concept is')
+    adding.add_argument('--summary-file', type=Path)
+    adding.add_argument('--id', help='Stable id (default: a slug of the name)')
+    commands.add_parser('list', help='List concepts with the freshness of each member')
+    removing = commands.add_parser('remove')
+    removing.add_argument('id')
+    for command_parser in commands.choices.values():
+        command_parser.add_argument('--project', type=Path)
+        command_parser.add_argument('--pane')
+        command_parser.add_argument('--agent-session')
+    args = parser.parse_args(argv)
+    root = (args.project or Path.cwd()).resolve()
+    if not args.project:
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+        if git.returncode == 0:
+            root = Path(git.stdout.strip()).resolve()
+    request = dict(root=str(root), action=args.command)
+    if args.command == 'add':
+        summary = args.summary_file.read_text() if args.summary_file else args.summary
+        request.update(name=args.name, members=args.members, summary=summary.strip() if summary else None, id=args.id)
+    elif args.command == 'remove':
+        request['id'] = args.id
+    request = {key: value for key, value in request.items() if value is not None}
+    if args.pane:
+        target = choose(instances(), args.pane, session_key(args), root, [])
+        if target is None:
+            raise RuntimeError('No matching editor; check --pane')
+        result = rpc(target['address'], 'return require("tour").concepts(...)', [request], timeout=120)
+    else:
+        result = headless('concepts', dict(request=json.dumps(request)))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -1019,6 +1060,8 @@ def main(argv=None):
         return ast_main(argv[1:])
     if argv and argv[0] == 'analyze':
         return analyze_main(argv[1:])
+    if argv and argv[0] == 'concept':
+        return concept_main(argv[1:])
     if argv and argv[0] == 'adjust':
         return adjust_main(argv[1:])
     if argv and argv[0] == 'brief':

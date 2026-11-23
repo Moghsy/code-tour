@@ -90,6 +90,20 @@ end
 
 -- §15: write the symbol graph as graphify-compatible node-link JSON.
 -- opts: { root?, out?, cache_dir? } -> { path, nodes, links, files, truncated? }
+-- Agent-authored concepts (the semantic layer): action = "add" | "list" | "remove".
+function M.concepts(opts)
+  opts = opts or {}
+  local idx = M.index({ root = opts.root, cache_dir = opts.cache_dir })
+  local store = require("code-tour.ast.store").new(idx, M.options)
+  local concepts = require("code-tour.ast.concepts")
+  if opts.action == "add" then
+    return concepts.add(idx, store, opts)
+  elseif opts.action == "remove" then
+    return concepts.remove(store, assert(opts.id, "remove needs a concept id"))
+  end
+  return { concepts = concepts.list(idx, store) }
+end
+
 -- The persisted project graph (`.code-tour/graph.json`, beside the notes store): graphify's
 -- node-link format, rebuilt only when a file, the language set or the resolution config changed.
 -- Unchanged files are never re-extracted (facts are cached by blob SHA), so a rebuild is
@@ -97,7 +111,13 @@ end
 local function manifest_of(idx)
   local files = {}
   for _, rel in ipairs(idx.files) do
-    files[rel] = idx:blob(rel)
+    -- an unsaved buffer is part of the project state, so it is part of the identity
+    local buf = vim.fn.bufnr(idx:abs(rel))
+    if buf > 0 and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified then
+      files[rel] = "buffer:" .. vim.fn.sha256(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+    else
+      files[rel] = idx:blob(rel)
+    end
   end
   local synthesizers = {}
   for language, rules in pairs(M.options.synthesizers or {}) do
@@ -123,7 +143,13 @@ function M.analyze(opts)
     if not result then
       error(err, 0)
     end
+    local idx = M.index({ root = opts.root, cache_dir = opts.cache_dir })
+    result.concepts = require("code-tour.ast.concepts").of(idx, require("code-tour.ast.store").new(idx, M.options),
+      result.symbol)
     return result
+  end
+  if opts.view == "concepts" then
+    return M.concepts({ root = opts.root, cache_dir = opts.cache_dir, action = "list" })
   end
   local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest))
   local cache = vim.fs.dirname(built.path) .. "/analysis.json"

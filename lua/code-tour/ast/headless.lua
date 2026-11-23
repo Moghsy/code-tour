@@ -34,6 +34,8 @@ local ok, result = pcall(function()
     return require("code-tour.ast").code_graph(opts)
   elseif cmd == "analyze" then
     return require("code-tour.ast").analyze(vim.json.decode(opts.request))
+  elseif cmd == "concepts" then
+    return require("code-tour.ast").concepts(vim.json.decode(opts.request))
   elseif cmd == "ast" then
     -- the request is one JSON object: { entries, root?, detail?, through? }
     local req = vim.json.decode(opts.request)

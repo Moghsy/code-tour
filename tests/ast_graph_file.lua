@@ -27,6 +27,16 @@ t.finish("ast graph file", function()
   eq(ast.code_graph(opts).reused, false, "a changed file rebuilds")
   eq(ast.code_graph(opts).reused, true, "and the rebuilt graph is reused")
 
+  -- an unsaved edit is part of the identity: the graph is rebuilt, and rebuilt again once it is saved away
+  local buf = vim.fn.bufadd(file)
+  vim.fn.bufload(buf)
+  vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "// unsaved" })
+  eq(ast.code_graph(opts).reused, false, "an unsaved buffer rebuilds the graph")
+  eq(ast.code_graph(opts).reused, true, "and the same unsaved state reuses it")
+  vim.bo[buf].modified = false
+  vim.api.nvim_buf_delete(buf, { force = true })
+  eq(ast.code_graph(opts).reused, false, "discarding the unsaved edit rebuilds it again")
+
   ast.options.boundaries = { { call = "x.y", to = "OrderService#checkout" } }
   eq(ast.code_graph(opts).reused, false, "a changed resolution config rebuilds")
   ast.options.boundaries = {}

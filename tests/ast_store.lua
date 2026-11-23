@@ -160,6 +160,9 @@ t.finish("ast store", function()
   check(recovered ~= nil, tostring(recovery_err))
   check(recovered.snippets.n1.symbol:find("#amount", 1, true), "history reopens the uniquely renamed symbol")
   eq(gist(recovered).body, "Fold the line totals.", "renamed symbol reuses its previous note")
+  check(recovered.snippets.n2 and recovered.snippets.n2.symbol:find("Line#subtotal", 1, true),
+    "a route edge follows the renamed caller, so the walked call is still on the tour")
+  eq(saved.symbols["shop.order.Order#total()"] ~= nil, true, "route endpoints are remembered with fingerprints")
   local missing = vim.deepcopy(saved)
   missing.entries[#missing.entries + 1] = "java:shop.order.Missing#missing()"
   local partial = assert(require("code-tour.ast.live").new({ root = relocated_root, recipe = missing, cache_dir = t.cache }))
@@ -168,7 +171,7 @@ t.finish("ast store", function()
 
   -- Old notes for positions that no longer exist at HEAD are pruned. Preserve the
   -- note reachable by address on HEAD even if it was read long ago.
-  local r = recovered.snippets.n1._root
+  local r = recovered.snippets.n1.regions[1]
   local current = recovered.snippets.n1
   local obsolete = current.symbol .. "/body/stmts[99]"
   recovered.store:put(obsolete, { file = current.file, symbol = current.symbol,

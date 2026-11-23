@@ -22,6 +22,17 @@ function M.eq(actual, expected, message)
 end
 
 -- false (and a printed gap) when the Java parser is missing
+-- The agent's route for the checkout tour (what the old computed main flow chose), as route overrides.
+function M.route(name)
+  local file = M.plugin .. "/tests/fixtures/routes/" .. (name or "checkout") .. ".json"
+  local edges = vim.json.decode(table.concat(vim.fn.readfile(file), "\n"))
+  local ops = {}
+  for _, e in ipairs(edges) do
+    ops[#ops + 1] = { kind = "route", from = e.from, to = e.to, level = e.level, site = e.site }
+  end
+  return ops
+end
+
 function M.parser()
   if parser_available("java") then
     return true

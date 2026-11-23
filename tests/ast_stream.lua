@@ -35,7 +35,7 @@ t.finish("ast stream", function()
   -- a store already holding fresh notes for every box of n2 (Order.total), written
   -- against the same code by an earlier tour
   local store = notes.new()
-  local earlier = assert(live_mod.new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+  local earlier = assert(live_mod.new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
     store = store }))
   local e2 = earlier.snippets.n2
   store:put(e2.symbol, { fingerprint = e2._fps[e2.symbol], gist = "Sum the lines.", body = "Every line counts.",
@@ -45,7 +45,7 @@ t.finish("ast stream", function()
       detail = "normal" })
   end
 
-  local result = tour.ast_tour({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache, store = store })
+  local result = tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache, store = store })
   local s = tour.state()
   local live = s.ast
   check(live and live.store == store, "the live tour uses the given store")

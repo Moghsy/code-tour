@@ -1,0 +1,52 @@
+[
+ {
+  "from": "shop.order.OrderService#checkout(Order)",
+  "to": "shop.order.Order#total()",
+  "level": 0
+ },
+ {
+  "from": "shop.order.Order#total()",
+  "to": "shop.order.Line#subtotal()",
+  "level": 0
+ },
+ {
+  "from": "shop.order.OrderService#checkout(Order)",
+  "to": "shop.discount.DiscountPolicy#apply(Order,Money)",
+  "level": 0
+ },
+ {
+  "from": "shop.discount.DiscountPolicy#apply(Order,Money)",
+  "to": "shop.util.Stats#max(int,int)",
+  "level": 0
+ },
+ {
+  "from": "shop.order.OrderService#checkout(Order)",
+  "to": "shop.payment.CardGateway#charge(Money)",
+  "level": 0
+ },
+ {
+  "from": "shop.payment.CardGateway#charge(Money)",
+  "to": "shop.money.Money#format()",
+  "level": 5
+ },
+ {
+  "from": "shop.payment.CardGateway#charge(Money)",
+  "to": "shop.money.Money#isZero()",
+  "level": 5
+ },
+ {
+  "from": "shop.order.OrderService#checkout(Order)",
+  "to": "shop.payment.ChargeResult#message()",
+  "level": 5
+ },
+ {
+  "from": "shop.order.OrderService#checkout(Order)",
+  "to": "shop.notify.EmailNotifier#send(String,String)",
+  "level": 5
+ },
+ {
+  "from": "shop.order.OrderService#checkout(Order)",
+  "to": "shop.notify.SmsNotifier#send(String,String)",
+  "level": 5
+ }
+]

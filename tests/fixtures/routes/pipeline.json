@@ -1,0 +1,63 @@
+[
+ {
+  "from": "shop.route.Pipeline#run(String)",
+  "to": "shop.route.Pipeline#normalize(String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#run(String)",
+  "to": "shop.route.Upper#apply(String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#run(String)",
+  "to": "shop.route.Pipeline#audit(String)",
+  "level": 3
+ },
+ {
+  "from": "shop.route.Pipeline#run(String)",
+  "to": "shop.route.Pipeline#decide(int,String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#decide(int,String)",
+  "to": "shop.route.Pipeline#isInvalid(int)",
+  "level": 5
+ },
+ {
+  "from": "shop.route.Pipeline#decide(int,String)",
+  "to": "shop.route.Pipeline#reject(String)",
+  "level": 5
+ },
+ {
+  "from": "shop.route.Pipeline#decide(int,String)",
+  "to": "shop.route.Pipeline#accept(String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#guarded(Path,String)",
+  "to": "shop.route.Pipeline#write(Path,String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#shapeBoth(String)",
+  "to": "shop.route.Trim#apply(String)",
+  "level": 0,
+  "site": "shaper.apply"
+ },
+ {
+  "from": "shop.route.Pipeline#viaParam(String)",
+  "to": "shop.route.Pipeline#shapeWith(Step,String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#persist(String)",
+  "to": "shop.route.Store#save(String,String)",
+  "level": 0
+ },
+ {
+  "from": "shop.route.Pipeline#persist(String)",
+  "to": "shop.route.Pipeline#normalize(String)",
+  "level": 0
+ }
+]

@@ -31,10 +31,28 @@ local function catalog(idx)
     end
   end
   local rt = route.new(idx)
-  local tests, main_paths = {}, {}
+  local tests, reached = {}, {}
+  -- distance over resolved calls (a fact about the graph, not a judgement of importance)
   local function main_path(id)
-    if not main_paths[id] then main_paths[id] = rt:main_flow({ id }).nodes end
-    return main_paths[id]
+    if reached[id] then return reached[id] end
+    local dist, queue, head = { [id] = { depth = 0 } }, { id }, 1
+    while head <= #queue do
+      local at = queue[head]
+      head = head + 1
+      if dist[at].depth < 4 then
+        local body = rt:body(at)
+        for _, site in ipairs(body and body.sites or {}) do
+          for _, t in ipairs(site.targets or {}) do
+            if not dist[t.symbol] then
+              dist[t.symbol] = { depth = dist[at].depth + 1 }
+              queue[#queue + 1] = t.symbol
+            end
+          end
+        end
+      end
+    end
+    reached[id] = dist
+    return dist
   end
   local ids = vim.tbl_keys(idx.symbols)
   table.sort(ids)

@@ -124,7 +124,7 @@ function M.new(request)
     through = current_through,
     overrides = ops,
     auto = auto,
-    options = { rating_bands = ast.options.rating_bands, cutoffs = ast.options.cutoffs, main_cap = ast.options.main_cap },
+    options = { cutoffs = ast.options.cutoffs, main_cap = ast.options.main_cap },
   })
   if not prep then
     return nil, #missing > 0 and (table.concat(missing, ", ") .. " (" .. err .. ")") or err

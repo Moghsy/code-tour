@@ -7,14 +7,15 @@ Use `python3 <skill-dir>/scripts/code-tour.py` for commands written as `code-tou
 
 ## Start a tour
 
-1. Run `code-tour ast ENTRY` from the project root with a symbol or `file:line`. The editor shows the route and the CLI returns the outline of boxes that need prose.
-2. A second `code-tour ast` is refused while a tour is live; pass `--force` to replace it, or use `code-tour adjust`. Several entries may be given (`code-tour ast A B`), and `ast.boundaries` continues calls the language cannot follow. Read the source and fill pending boxes in walk order, starting at the reader's position. Use the returned region IDs and fill commands. Write one Markdown section per box with a gist in the first paragraph and the explanation after it. See [AST fills, examples, and knowledge queries](references/ast-tours.md).
-3. If the CLI reports a fallback, write JSON stops and send them with `code-tour --file PATH`. Use that workflow for a diff review or a tour of specific ranges too. See [authored stop schemas, examples, and streaming](references/authored-tours.md).
+1. **Understand the code first.** Read the persisted graph and its lazy views: `code-tour analyze communities`, `gods`, `crossings` and `neighbors SYMBOL`, then read the source. The plugin states facts (resolved calls with their confidence, gaps, sinks, hand-offs) and never decides what matters.
+2. **Design the route and send the tour.** Choose the flow yourself. Write it as edges and pass it with `code-tour ast ENTRY --route route.json` (`[{"from": "A#a", "to": "B#b", "level": 0}]`, level 0 being the main walk and 1 to 5 optional branches by detail; an optional `"site": "call.text"` limits an edge to one call). `--walk 'A -> B'` and `--branch 'A -> B@2'` name single edges. Every call you do not name stays lazy, so a tour without a route shows only its entry. Fix what the outline reports: a `gap` is a routed call the code cannot follow (close it with `--edge`), and a route warning means an edge matched no call. A second `code-tour ast` is refused while a tour is live; pass `--force` to replace it, or `code-tour adjust --tour T --route route.json` to change it. Several entries may be given (`code-tour ast A B`), and `ast.boundaries` continues calls the language cannot follow.
+3. **Explain with that context.** Read the source and fill pending boxes in walk order, starting at the reader's position. Use the returned region IDs and fill commands. Write one Markdown section per box with a gist in the first paragraph and the explanation after it. See [AST fills, examples, and knowledge queries](references/ast-tours.md).
+4. If the CLI reports a fallback, write JSON stops and send them with `code-tour --file PATH`. Use that workflow for a diff review or a tour of specific ranges too. See [authored stop schemas, examples, and streaming](references/authored-tours.md).
 
 ## Choose the main flow
 
 - **Agent-authored tours.** Mark essential calls with `next: true` and `level: 0`. Keep that path connected from entry to final effect. Higher levels add detail the reader can fold with `<leader>a-`. Optional and lazy branches are opened by the reader.
-- **AST tours.** The plugin computes ratings. Rating 0 is the main flow and is followed automatically. Higher ratings appear as optional or on-demand branches according to the selected detail. Changing detail keeps the main flow. Read the outline before writing and use route overrides only when the task calls for changing it.
+- **AST tours.** You supply the route (step 2 above); the plugin computes no ratings and picks no main flow. Level 0 edges are followed automatically, higher levels appear as optional branches according to the selected detail, and everything unnamed is lazy for the reader to open. Changing detail keeps the main flow.
 
 ## Answer an editor request
 

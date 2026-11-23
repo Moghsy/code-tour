@@ -202,7 +202,7 @@ end
 -- written overview gist reaches the tree.
 local function fixture()
   if not t.parser() then return end
-  local result = tour.ast_tour({ entries = { "OrderService#checkout" }, root = t.project(), cache_dir = t.cache })
+  local result = tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = t.project(), cache_dir = t.cache })
   t.check(result and result.tour, "the AST tour opens")
   local s = tour.state()
   local main_calls = 0

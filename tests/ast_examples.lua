@@ -49,7 +49,7 @@ t.finish("AST examples", function()
     delivered[#delivered + 1] = prompt
     callback(true)
   end
-  tour.ast_tour({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache })
+  tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache })
   local state = tour.state()
   local stop = state.stops[1]
   t.eq(stop.test_example._parent_stop, stop, "Example links to its overview")

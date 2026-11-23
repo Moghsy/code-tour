@@ -19,6 +19,7 @@ local function live_for(opts)
     detail = opts.detail,
     root = opts.root,
     through = opts.through,
+    overrides = opts.overrides,
   })
   if not live then
     error(err, 0)

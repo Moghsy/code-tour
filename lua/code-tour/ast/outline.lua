@@ -100,11 +100,6 @@ function M.prepare(idx, specs, opts)
   opts = opts or {}
   specs = specs or {}
   local rt = route.new(idx, opts.options)
-  local hint_warnings = {}
-  if opts.hints ~= false and require("code-tour.ast").options.hints ~= false then
-    local hints = require("code-tour.ast.hints").load(idx)
-    rt.hints, hint_warnings = hints, hints.warnings or {}
-  end
   local entries = {}
   for _, spec in ipairs(specs) do
     local ids, err = rt:resolve_entry(spec)
@@ -117,6 +112,9 @@ function M.prepare(idx, specs, opts)
     end
     vim.list_extend(entries, ids)
   end
+  -- the agent's route shapes the first projection too, so its short ids (n1.s2, n1.r6) match
+  -- the ones the agent saw; the full apply below repeats it and reports any problems
+  require("code-tour.ast.overrides").route(rt, opts.overrides, {})
   local only_adds = opts.overrides and #opts.overrides > 0
   if only_adds then
     for _, op in ipairs(opts.overrides) do
@@ -133,7 +131,6 @@ function M.prepare(idx, specs, opts)
     vim.list_extend(through, ids)
   end
   local marks, warnings = rt:through_marks(entries, through)
-  vim.list_extend(warnings, hint_warnings)
   local flow = rt:main_flow(entries, marks)
   vim.list_extend(warnings, flow.warnings)
   local tree = rt:tree(entries, flow)
@@ -150,7 +147,6 @@ function M.prepare(idx, specs, opts)
     prep.overrides = normalized
     local added = require("code-tour.ast.overrides").apply(rt, normalized, entries, warnings)
     prep.region_overrides = added
-    rt.hints = rt.hints
     local marks, more = rt:through_marks(entries, through)
     vim.list_extend(warnings, more)
     flow = rt:main_flow(entries, marks)
@@ -234,7 +230,6 @@ function M.snippet(prep, node, n, mode, detail)
         rating = e.rating,
         effective = e.eff,
         main = e.main or nil,
-        would_main = e.would_main,
         confidence = e.confidence,
         via = e.via,
         candidates = e.candidates,
@@ -354,9 +349,6 @@ local function site_item(s, owners)
     end
     if s.why then
       parts[#parts + 1] = s.why
-    end
-    if s.would_main then
-      parts[#parts + 1] = "main"
     end
     text = text .. " [" .. table.concat(parts, " ") .. "]"
   elseif s.mode == "unresolved" then

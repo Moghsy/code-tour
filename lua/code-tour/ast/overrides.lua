@@ -119,8 +119,64 @@ function M.normalize(rt, snippets, ops, detail)
   return result
 end
 
+-- The agent's route: { kind = "route", from, to, level }. Both ends are symbol specs resolved
+-- here, so a route survives a rebuild; an end that no longer resolves is a warning.
+local function route_edges(rt, ops, warnings)
+  rt.route, rt.routed_bodies = {}, nil
+  local edges = {}
+  for _, op in ipairs(ops or {}) do
+    if op.kind == "route" then
+      local from, from_err = rt:resolve_entry(op.from)
+      local to, to_err = rt:resolve_entry(op.to)
+      if not from or #from ~= 1 then
+        warnings[#warnings + 1] = ("route %s -> %s: %s"):format(op.from, op.to, from_err or "the caller must name one symbol")
+      elseif not to or #to ~= 1 then
+        warnings[#warnings + 1] = ("route %s -> %s: %s"):format(op.from, op.to, to_err or "the callee must name one symbol")
+      else
+        local level = tonumber(op.level) or 0
+        local named = rt.route[from[1]] or {}
+        local list = named[to[1]] or {}
+        -- the last edge named wins for the same call, so an adjustment can demote one
+        local replaced = false
+        for _, entry in ipairs(list) do
+          if entry.site == op.site then
+            entry.level, replaced = level, true
+          end
+        end
+        if not replaced then
+          list[#list + 1] = { level = level, site = op.site }
+        end
+        named[to[1]] = list
+        rt.route[from[1]] = named
+        edges[#edges + 1] = { op = op, from = from[1], to = to[1] }
+      end
+    end
+  end
+  return edges
+end
+
+M.route = route_edges
+
+-- Verified last, once every site edit is in place, so the checked bodies are the final ones.
+local function check_route(rt, edges, warnings)
+  for _, edge in ipairs(edges) do
+    local body = rt:body(edge.from)
+    local found = false
+    for _, site in ipairs(body and body.sites or {}) do
+      for _, t in ipairs(site.targets or {}) do
+        found = found or t.symbol == edge.to
+      end
+      found = found or (site.declared and site.declared.symbol == edge.to) or false
+    end
+    if not found then
+      warnings[#warnings + 1] = ("route %s -> %s: no resolved call from the caller to the callee"):format(edge.op.from, edge.op.to)
+    end
+  end
+end
+
 function M.apply(rt, ops, entries, warnings)
   rt.site_overrides = {}
+  local edges = route_edges(rt, ops, warnings)
   local regions = {}
   for _, op in ipairs(ops) do
     if op.kind == "add" then
@@ -146,6 +202,7 @@ function M.apply(rt, ops, entries, warnings)
       edits[op.occurrence] = change
     end
   end
+  check_route(rt, edges, warnings)
   return regions
 end
 

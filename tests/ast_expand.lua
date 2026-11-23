@@ -55,7 +55,7 @@ local function unit(root)
   local live_mod = require("code-tour.ast.live")
   local notes = require("code-tour.ast.notes")
   local store = notes.new()
-  local live = assert(live_mod.new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+  local live = assert(live_mod.new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
     store = store }))
   local n1 = live.snippets.n1
   t.eq(n1.symbol, CHECKOUT, "n1 is checkout")
@@ -114,7 +114,7 @@ local function unit(root)
   local fsn = live:expand(fkey)
   t.eq(fsn.label, "Formatter.format(Money)", "n4.s5 opens Formatter.format(Money)")
   local mkey, msite = site_key(fsn, "money.format", 1)
-  t.eq(msite.why, "detail", "a rated site of an expanded snippet is lazy, why detail")
+  t.eq(msite.why, "not in the route", "a site the route does not name is lazy")
   local msn, mstop = live:expand(mkey)
   t.eq(msn.symbol, "java:shop.money.Money#format()", "nested expansion opens Money.format")
   t.eq(msn.depth, fsn.depth + 1, "nested one level deeper")
@@ -147,7 +147,7 @@ local function unit(root)
 
   -- the store already holds fresh notes for every box: nothing to write
   fill_all(live, sn)
-  local live2 = assert(live_mod.new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+  local live2 = assert(live_mod.new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
     store = store }))
   local sn2, stop2, needs2 = live2:expand(key)
   t.check(not needs2, "fresh notes for every box: nothing needs writing")
@@ -165,7 +165,7 @@ local function unit(root)
   live2.detail = "normal"
 
   -- selections ------------------------------------------------------------------------
-  local live3 = assert(live_mod.new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+  local live3 = assert(live_mod.new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
     store = notes.new() }))
   local c = live3.snippets.n1
   local r2 = region(c, "r2")
@@ -258,7 +258,7 @@ local function editor(root)
   local tour = require("tour")
   tour.setup({ keys = false, smooth_scroll = false })
   local store = require("code-tour.ast.notes").new()
-  local res = tour.ast_tour({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache, store = store })
+  local res = tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache, store = store })
   local s = tour.state()
   t.check(s.ast and res.tour, "an AST tour is open")
   local key = "n1.s13>" .. EMAIL
@@ -320,7 +320,7 @@ local function editor(root)
   local sms_call = find_anchor(sms_key)
   t.check(sms_call and sms_call.lazy, "the SmsNotifier candidate is still lazy")
   -- write its notes in the store first, through a scratch live tour on the same store
-  local scratch = assert(require("code-tour.ast.live").new({ entries = { "OrderService#checkout" }, root = root,
+  local scratch = assert(require("code-tour.ast.live").new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root,
     cache_dir = t.cache, store = store }))
   fill_all(scratch, (scratch:expand(sms_key)))
   before = #sent

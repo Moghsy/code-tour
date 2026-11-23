@@ -16,7 +16,7 @@ t.finish("ast project", function()
   local notes = require("code-tour.ast.notes")
   local stops = require("code-tour.stops")
   local store = notes.new()
-  local live = assert(live_mod.new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+  local live = assert(live_mod.new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
     store = store }))
 
   -- stable ids: the first projection is in walk order
@@ -82,7 +82,7 @@ t.finish("ast project", function()
   -- lazy edges: lazy calls with their reason and the target's range; refs are not projected
   local lazy = by_anchor["n1.s11>java:shop.order.Order#markPaid()"]
   check(lazy and lazy.stop.lazy, "lazy markPaid call")
-  eq({ lazy.stop.why, lazy.stop.file, lazy.stop.title }, { "setter", "src/main/java/shop/order/Order.java",
+  eq({ lazy.stop.why, lazy.stop.file, lazy.stop.title }, { "not in the route", "src/main/java/shop/order/Order.java",
     "Order.markPaid()" }, "lazy call fields")
   eq(lazy.stop._parent_box, n1.parts[6], "lazy call attached to r6")
   check(not lazy.stop.next and not lazy.stop.parts[1], "lazy calls are not walked and have no parts")

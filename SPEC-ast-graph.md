@@ -167,6 +167,8 @@ derived (rebuilt):  { snippets: [{n, symbol, tier, regions: [address…]}],
 
 - A **snippet** is a symbol the tour visits, with the regions selected for it (§7) and its tier (§9.7). The initial projection assigns short IDs (`n1`, `n2`…) in walk order. A live tour keeps each symbol’s ID when detail changes or a lazy snippet opens.
 - The **route** is the list of site edges the tour uses. Each rated edge has a **rating** (§8.2), an integer where 0 is most important, and its **mode** follows from the rating and the detail's cutoffs (§8.6): `walk` (gold, followed by `aj`), `optional` (red) or `lazy` (opened with `ad`, explained on demand). Edges to code already shown are `ref` and unrated. Edges on the **main flow** (§8.3) have `main: true` and rating 0.
+
+**Who decides the flow (supersedes the computed route of §8.2–8.5).** The plugin does not rate calls or pick a main flow. The agent studies the project graph (`graph.json`, `code-tour analyze`) and supplies the route as edges `{from, to, level, site?}`: level 0 is the main walk, levels 1 to 5 are optional branches offered by detail (§8.6), and every call the route does not name is lazy (`why: "not in the route"`). `site` limits an edge to one call written as that text. The route reaches the plugin as `route` overrides (`--route FILE`, `--walk`, `--branch`), is kept in the recipe like any override, and may name an implementation to settle a dispatch. What the plugin still computes are facts about the code, not judgements: sinks, hand-offs and forks, gaps where a routed call cannot be followed, and the success-path and effect analysis that shapes regions. The scoring, trivial-target detection, carriers-and-effects promotion, rating bands and the graphify/Understand-Anything hints were removed.
 - `through` lists symbols the main flow must pass through (§8.1); `gaps` lists the places where the main flow could not be followed (§8.3).
 - **Overrides** record the agent's or reader's corrections (§9.6), so a reopened tour keeps them.
 - Notes are not part of the tour; the tour looks them up in the store by region address (§11.2).
@@ -865,7 +867,6 @@ When a symbol has no backend or parser, pass a JSON range via `code-tour ast --a
 | `ast.max_files` | `5000` | full-scan cap |
 | `ast.hints` | `true` | read `.ua/` and `graphify-out/` graphs (§6.2) |
 | `ast.ignore` | `{}` | extra paths to remove from git's file list (§4.3) |
-| `ast.rating_bands` | `{6, 4, 3, 2}` | lower bounds of `s′` for ratings 1–4 (§8.2) |
 | `ast.cutoffs` | the table in §8.6 | offer cutoff and budget per detail |
 | `ast.main_cap` | `40` | most main-flow snippets in a tour (§8.3) |
 | `ast.models` | `{}` | tier → model name for delegation (§9.7); empty means no delegation |

@@ -1,8 +1,12 @@
--- The route (SPEC-ast-graph §8): entries, the main flow, labels and ratings, and the
+-- The route (SPEC-ast-graph §8): entries, the agent's flow, labels and ratings, and the
 -- projection of one rated tree onto a detail level (cutoffs, budget, modes).
 --
--- Two passes from the entries, both depth-first in evaluation order:
---   main_flow  the vital path (§8.3): success paths, carriers, effects, sinks, gaps, forks
+-- The plugin never decides what matters: the agent supplies the route as edges
+-- (caller -> callee, level; 0 is the main walk, higher levels are optional branches) and
+-- every call it did not name is lazy. Two passes from the entries, depth-first in
+-- evaluation order:
+--   main_flow  the agent's level-0 edges followed from the entries, with the facts about
+--              them: sinks, hand-offs and gaps where the code cannot be followed (§8.3)
 --   tree       every site labelled or rated (§8.2); targets rated within the widest
 --              cutoff are expanded, so any detail is a projection of the same tree and
 --              changing detail never re-rates (§8.6)
@@ -14,7 +18,6 @@ local R = {}
 R.__index = R
 
 M.defaults = {
-  rating_bands = { 6, 4, 3, 2 },
   cutoffs = {
     overview = { offer = 1, budget = 8 },
     normal = { offer = 3, budget = 15 },
@@ -29,7 +32,7 @@ M.defaults = {
 function M.new(idx, opts)
   local o = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
   return setmetatable({ idx = idx, r = idx.resolver, opts = o,
-    memo = { success = {}, carriers = {}, effect = {}, trivial = {} } }, R)
+    memo = { success = {}, carriers = {}, effect = {} } }, R)
 end
 
 local inside = regions.inside
@@ -42,6 +45,20 @@ M.site_of = site_of
 -- A lambda that is stored or returned runs later, not during this method.
 local function stored(s)
   return s.deferred ~= nil and s.deferred.call == nil
+end
+
+-- The level the agent's route gives one call site for a callee: an edge that names the site's
+-- text beats one that names only the callee.
+local function level_for(entries, site)
+  local general
+  for _, entry in ipairs(entries or {}) do
+    if entry.site == nil then
+      general = entry.level
+    elseif entry.site == site.text then
+      return entry.level
+    end
+  end
+  return general
 end
 
 function R:body(id)
@@ -77,6 +94,33 @@ function R:body(id)
       end
       self.edited_bodies[id] = body
     end
+  end
+  local named = body and self.route and self.route[id]
+  if named then
+    -- the agent's route (caller -> callee, level): rate the sites that call a named callee
+    self.routed_bodies = self.routed_bodies or {}
+    local routed = self.routed_bodies[id]
+    if not routed then
+      routed = vim.tbl_extend("force", body, { sites = {} })
+      for i, site in ipairs(body.sites) do
+        local level
+        for _, t in ipairs(site.targets or {}) do
+          local l = level_for(named[t.symbol], site)
+          if l then
+            level = level == nil and l or math.min(level, l)
+          end
+        end
+        if level == nil and site.declared then
+          level = level_for(named[site.declared.symbol], site)
+        end
+        if level ~= nil and site.rating_override == nil then
+          site = vim.tbl_extend("force", site, { rating_override = level })
+        end
+        routed.sites[i] = site
+      end
+      self.routed_bodies[id] = routed
+    end
+    body = routed
   end
   return body, sym, facts
 end
@@ -542,112 +586,6 @@ end
 
 -- Trivial targets (§8.2) ---------------------------------------------------------------
 
-local function is_param(body, d)
-  local l = d and d.k == "id" and d["local"] and body.locals[d["local"]]
-  return l and l.kind == "param"
-end
-
-local function forwards(body, s)
-  local recv = s.receiver or { k = "implicit" }
-  local k = recv.k
-  local ok = k == "implicit" or k == "this" or k == "super" or k == "type" or k == "id"
-    or (k == "field" and ((recv.object and recv.object.k == "this") or require("code-tour.ast.resolve").dotted(recv)))
-  if not ok then
-    return false
-  end
-  for _, a in ipairs(s.args or {}) do
-    if not (is_param(body, a) or (a.k == "lit" and not a.expr)) then
-      return false
-    end
-  end
-  return true
-end
-
--- The reason a target is trivial ("accessor", "setter", "factory", "constructor",
--- "delegates to X"), or nil. A delegate also returns the site it forwards to.
-function R:trivial(id)
-  local memo = self.memo.trivial
-  if memo[id] ~= nil then
-    return memo[id][1], memo[id][2]
-  end
-  local why, via = self:trivial_uncached(id)
-  memo[id] = { why, via }
-  return why, via
-end
-
-function R:trivial_uncached(id)
-  local sym = self.idx:symbol(id)
-  if not sym then
-    return nil
-  end
-  if sym.implicit then
-    return "accessor"
-  end
-  local body = self:body(id)
-  if not body then
-    return nil
-  end
-  local stmts = body.stmts
-  if sym.kind == "constructor" then
-    for _, st in ipairs(stmts) do
-      local s = st.kind == "explicit_constructor_invocation" and site_of(body, st.sites[1])
-      local assigns = st.kind == "expression_statement" and st.value and st.value.k == "assign" and st.value.field
-        and #st.sites == 0
-      if not (assigns or (s and s.arity == 0)) then
-        return nil
-      end
-    end
-    return "constructor"
-  end
-  if #stmts ~= 1 or body.metrics.branches > 0 or body.metrics.lines > 4 then
-    return nil
-  end
-  local st, v = stmts[1], stmts[1].value
-  if not v then
-    return nil
-  end
-  if st.kind == "return_statement" then
-    if #st.sites == 0 and (v.k == "id" or (v.k == "lit" and not v.expr)
-        or (v.k == "field" and v.object and v.object.k == "this")) then
-      return "accessor"
-    end
-    if v.k == "new" then
-      return "factory"
-    end
-  elseif st.kind == "expression_statement" and v.k == "assign" and v.field and #st.sites == 0 then
-    return "setter"
-  end
-  if v.k == "call" and #st.sites == 1 and v.site == st.sites[1] then
-    local s = site_of(body, v.site)
-    if s and forwards(body, s) then
-      return "delegates to " .. s.text, s
-    end
-  end
-  return nil
-end
-
--- Trivial for the main flow: a delegate is judged by what it forwards to (one hop), so
--- the flow is not cut at a forwarding method.
-function R:trivial_for_main(id)
-  local why, via = self:trivial(id)
-  if not why then
-    return false
-  end
-  if via then
-    local sym = self.idx:symbol(id)
-    if library_call(via, self:backend(sym).sinks) then
-      return false
-    end
-    local t = via.targets and #via.targets == 1 and via.targets[1].symbol
-    if t and t ~= id and not self:trivial(t) then
-      return false
-    end
-  end
-  return true
-end
-
--- Importance (§8.4) ------------------------------------------------------------------
-
 local function catches(stmts)
   local n = 0
   for _, st in ipairs(stmts) do
@@ -676,9 +614,6 @@ function R:score(id, site)
   if m.throws > 0 or (body and catches(body.stmts) > 0) then
     score = score + 1
   end
-  if self.hints and self.hints.symbols[id] and self.hints.symbols[id].complex then
-    score = score + 1
-  end
   local name = sym and sym.name or ""
   if quiet[name] or name:match("^print") then
     score = score - 2
@@ -693,16 +628,6 @@ function R:score(id, site)
     end
   end
   return score
-end
-
-function R:band(s)
-  local b = self.opts.rating_bands
-  for k = 1, 4 do
-    if s >= b[k] then
-      return k
-    end
-  end
-  return 5
 end
 
 -- Dispatch on the route (§8.5) ---------------------------------------------------------
@@ -816,6 +741,16 @@ function R:targets(site, body, sym, incoming)
       end
     end
   end
+  -- a named implementation settles a dispatch that construction tracking could not
+  local named = #ts > 1 and sym and self.route and self.route[sym.id]
+  if named then
+    local picked = vim.tbl_filter(function(t)
+      return level_for(named[t.symbol], site) ~= nil
+    end, ts)
+    if #picked > 0 then
+      return picked
+    end
+  end
   return ts
 end
 
@@ -879,39 +814,38 @@ end
 local gap_reasons = { generic = "generic receiver", dynamic = "target unknown", ["no backend"] = "no backend" }
 
 -- Returns { nodes = {id -> node}, order = {ids}, warnings }. A node:
---   { id, depth, main_sites = {site id -> {target, ref?, capped?, built?}}, would = {site id},
+--   { id, depth, main_sites = {site id -> {target, ref?, capped?, built?}},
 --     gaps = {{site, reason}}, sinks = {{site, entry}}, forks }
+-- Only sites the agent routed at level 0 (or --through forced) are followed; everything else
+-- about the node is a fact: sinks and hand-offs are listed wherever they occur, and a routed
+-- site the code cannot follow is a gap.
 function R:main_flow(entries, marks)
   marks = marks or {}
   local flow = { nodes = {}, order = {}, warnings = {} }
   local cap = self.opts.main_cap
   local capped = false
   local function visit(id, incoming, depth)
-    local node = { id = id, depth = depth, main_sites = {}, would = {}, gaps = {}, sinks = {}, forks = {},
-      incoming = incoming }
+    local node = { id = id, depth = depth, main_sites = {}, gaps = {}, sinks = {}, forks = {}, incoming = incoming }
     flow.nodes[id] = node
     flow.order[#flow.order + 1] = id
     local body, sym = self:body(id)
     if not body then
       return node
     end
-    local succ = self:success(body)
-    local C = self:carriers(body)
     local backend = self:backend(sym)
-    node.forks = succ.forks
+    node.forks = self:success(body).forks
     local function gap(s, reason)
       node.gaps[#node.gaps + 1] = { site = s.id, reason = reason }
     end
     for _, s in ipairs(body.sites) do
-      local promote = s.rating_override == 0
-      if promote or (s.rating_override == nil and succ.on(s.at) and not stored(s) and s.kind ~= "accessor") then
-        local forced = marks[id] and marks[id][s.id]
-        local sink = library_call(s, backend.sinks)
-        if sink then
-          node.sinks[#node.sinks + 1] = { site = s.id, entry = sink }
-        elseif library_call(s, backend.handoffs) then
-          gap(s, "hand-off")
-        end
+      local sink = library_call(s, backend.sinks)
+      if sink then
+        node.sinks[#node.sinks + 1] = { site = s.id, entry = sink }
+      elseif library_call(s, backend.handoffs) then
+        gap(s, "hand-off")
+      end
+      local forced = marks[id] and marks[id][s.id]
+      if (s.rating_override == 0 or forced) and s.kind ~= "accessor" then
         local ts, built = self:targets(s, body, sym, incoming)
         if forced then
           ts = vim.tbl_filter(function(t)
@@ -921,38 +855,25 @@ function R:main_flow(entries, marks)
         if #ts == 0 then
           if s.unresolved == "abstract" then
             gap(s, "no implementation in the project")
-          elseif C[s.id] and gap_reasons[s.unresolved or ""] then
-            gap(s, gap_reasons[s.unresolved])
+          elseif not sink then
+            gap(s, gap_reasons[s.unresolved or ""] or s.unresolved or "target unknown")
           end
+        elseif #ts > 1 then
+          gap(s, s.declared and (#ts .. " implementations; name one in the route")
+            or (#ts .. " candidates (ambiguous)"))
         else
-          local effect = false
-          for _, t in ipairs(ts) do
-            effect = effect or self:has_effect(t.symbol)
-          end
-          if promote or forced or C[s.id] or effect then
-            if #ts > 1 then
-              gap(s, s.declared and (#ts .. " implementations, none known to be constructed")
-                or (#ts .. " candidates (ambiguous)"))
-            else
-              local t = ts[1].symbol
-              if not promote and not forced and self.hints and self.hints.symbols[t] and self.hints.symbols[t].god then
-                node.would[s.id] = true
-              elseif not promote and not forced and self:trivial_for_main(t) then
-                node.would[s.id] = true
-              elseif flow.nodes[t] then
-                node.main_sites[s.id] = { target = t, ref = true }
-              elseif #flow.order >= cap then
-                node.main_sites[s.id] = { target = t, capped = true }
-                if not capped then
-                  capped = true
-                  flow.warnings[#flow.warnings + 1] = ("main flow capped at %d snippets (ast.main_cap)"):format(cap)
-                end
-              else
-                node.main_sites[s.id] = { target = t, carrier = C[s.id] or nil, effect = effect or nil, built = built,
-                  forced = forced and true or nil }
-                visit(t, { body = body, site = s, incoming = incoming }, depth + 1)
-              end
+          local t = ts[1].symbol
+          if flow.nodes[t] then
+            node.main_sites[s.id] = { target = t, ref = true }
+          elseif #flow.order >= cap then
+            node.main_sites[s.id] = { target = t, capped = true }
+            if not capped then
+              capped = true
+              flow.warnings[#flow.warnings + 1] = ("main flow capped at %d snippets (ast.main_cap)"):format(cap)
             end
+          else
+            node.main_sites[s.id] = { target = t, built = built, forced = forced and true or nil }
+            visit(t, { body = body, site = s, incoming = incoming }, depth + 1)
           end
         end
       end
@@ -1014,31 +935,17 @@ function R:tree(entries, flow)
               e.label, e.why = "ref", "already reached from here"
               e.first = reached[target]
             else
-              local why = self:trivial(target)
               if s.rating_override ~= nil then
                 e.rating = s.rating_override
-                e.s = self:score(target, s) / (1 + node.depth)
-              elseif why then
-                e.rating, e.why = 9, why
-              elseif node.depth > self.opts.max_depth then
-                e.rating, e.why = 9, "beyond depth"
               else
-                e.s = self:score(target, s) / (1 + node.depth)
-                e.rating = self:band(e.s)
+                e.rating, e.why = 9, "not in the route"
               end
+              e.s = 0
               if ms and ms.capped then
                 e.lazy = "main cap"
               end
-              if self.hints and self.hints.symbols[target] and self.hints.symbols[target].god
-                  and s.rating_override == nil then
-                e.lazy = "hub"
-              end
-              local from = self.hints and self.hints.symbols[path._entry]
-              local to = self.hints and self.hints.symbols[target]
-              e.same_community = from and to and from.community ~= nil and from.community == to.community
               e.eff = math.max(e.rating, in_eff)
             end
-            e.would_main = mnode and mnode.would[s.id] or nil
             reached[target] = reached[target] or e
             node.edges[#node.edges + 1] = e
             local inc = { body = body, site = s, incoming = incoming }

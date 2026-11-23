@@ -32,7 +32,7 @@ t.finish("ast live", function()
   local root = t.project()
   local function open()
     sent = {}
-    tour.ast_tour({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+    tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
       store = require("code-tour.ast.notes").new() })
     return tour.state()
   end
@@ -56,11 +56,11 @@ t.finish("ast live", function()
 
   -- a second agent-built tour must not silently replace the live one; --force does
   local live_id = open().id
-  local refused, why = pcall(tour.ast_tour, { entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+  local refused, why = pcall(tour.ast_tour, { entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
     keep_live = true })
   check(not refused and tostring(why):find("--force", 1, true), "a second ast tour is refused: " .. tostring(why))
   eq(tour.state().id, live_id, "the live tour survived the refusal")
-  local forced, forced_why = pcall(tour.ast_tour, { entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache })
+  local forced, forced_why = pcall(tour.ast_tour, { entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache })
   check(forced and tour.state().id ~= live_id, "without keep_live (--force) the tour is replaced: " .. tostring(forced_why))
   local bad, bad_why = pcall(tour.fill, "13", "## overview\ngist")
   check(not bad and tostring(bad_why):find("fill ids look like n13", 1, true), "bad fill id: " .. tostring(bad_why))

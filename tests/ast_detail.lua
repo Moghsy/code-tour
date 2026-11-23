@@ -40,7 +40,7 @@ t.finish("ast detail", function()
 
   -- --------------------------------------------------------------- unit: detail.change
   do
-    local live = assert(live_mod.new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+    local live = assert(live_mod.new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
       store = notes.new() }))
     local ok, err = pcall(live.set_detail, live, "verbose")
     check(not ok and err:find("overview, normal, detailed, exhaustive", 1, true), "unknown detail lists the four: "
@@ -96,7 +96,7 @@ t.finish("ast detail", function()
   end
 
   -- --------------------------------------------------------------- editor: tour.ast_detail
-  local result = tour.ast_tour({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache, store = store })
+  local result = tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache, store = store })
   local s = tour.state()
   local live = s.ast
   check(live and result.detail == "normal", "AST tour open at normal")

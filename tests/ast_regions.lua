@@ -21,7 +21,7 @@ t.finish("ast regions", function()
   local outline = require("code-tour.ast.outline")
 
   local function tour(spec, detail)
-    return assert(outline.build(idx, { spec }, { detail = detail }))
+    return assert(outline.build(idx, { spec }, { detail = detail, overrides = spec == "OrderService#checkout" and t.route() or nil }))
   end
   local function shape(snippet)
     return vim.tbl_map(function(r)

@@ -6,7 +6,7 @@ local checkout = "OrderService#checkout"
 
 local function live(root, entry, detail)
   return assert(require("code-tour.ast.live").new({ root = root, entries = { entry or checkout },
-    detail = detail, cache_dir = t.cache }))
+    overrides = t.route(), detail = detail, cache_dir = t.cache }))
 end
 
 local function gist(tour, n, r)
@@ -168,7 +168,7 @@ t.finish("ast store", function()
 
   -- Old notes for positions that no longer exist at HEAD are pruned. Preserve the
   -- note reachable by address on HEAD even if it was read long ago.
-  local r = recovered.snippets.n1.regions[1]
+  local r = recovered.snippets.n1._root
   local current = recovered.snippets.n1
   local obsolete = current.symbol .. "/body/stmts[99]"
   recovered.store:put(obsolete, { file = current.file, symbol = current.symbol,
@@ -194,7 +194,11 @@ t.finish("ast store", function()
     "local plugin, root, cache, gate, box = unpack(arg)",
     "vim.opt.rtp:prepend(plugin)",
     'vim.opt.rtp:append(vim.env.CODE_TOUR_PARSER_RUNTIME or vim.fn.expand("~/.local/share/nvim/site"))',
-    'local tour = assert(require("code-tour.ast.live").new({ root = root, entries = {"OrderService#checkout"}, cache_dir = cache }))',
+    'local ops = {}',
+    'for _, e in ipairs(vim.json.decode(table.concat(vim.fn.readfile(plugin .. "/tests/fixtures/routes/checkout.json"), "\\n"))) do',
+    '  ops[#ops + 1] = { kind = "route", from = e.from, to = e.to, level = e.level }',
+    'end',
+    'local tour = assert(require("code-tour.ast.live").new({ root = root, entries = {"OrderService#checkout"}, overrides = ops, cache_dir = cache }))',
     'assert(vim.wait(3000, function() return vim.uv.fs_stat(gate) end, 10), "worker gate never opened")',
     'for i = 1, 8 do tour:fill("n1", { [box] = "Concurrent " .. box .. " " .. i }) end',
   }, worker)

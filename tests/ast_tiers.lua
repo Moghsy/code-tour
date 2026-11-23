@@ -23,7 +23,7 @@ t.finish("AST writing tiers", function()
   local root = t.project()
   local ast = require("code-tour.ast")
   ast.setup({ models = { light = "quick", standard = "regular", deep = "thorough" } })
-  local live = assert(require("code-tour.ast.live").new({ entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache }))
+  local live = assert(require("code-tour.ast.live").new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache }))
   live:fill("n1", "## overview\nValidate and charge the order.\n\nThe checkout flow starts with validation.", { model = "quick" })
   local saved = live:lookup(live.snippets.n1)
   t.eq(saved.model, "quick", "A fill records the writer model")
@@ -45,7 +45,7 @@ t.finish("AST writing tiers", function()
     end
   end
   local reopened = assert(require("code-tour.ast.live").new({
-    entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+    entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache,
   }))
   t.check(not reopened:lookup(reopened.snippets.n1), "The reader cannot see the stale gist")
   local prior = require("code-tour.ast.brief").build(reopened, "n1", ctx)

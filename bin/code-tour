@@ -701,6 +701,37 @@ def override_arguments(parser):
             overrides.append(dict(kind=option_string[2:], value=values))
             setattr(namespace, self.dest, overrides)
 
+    class Route(argparse.Action):
+        """The agent's route: caller -> callee edges, level 0 being the main walk."""
+        def __call__(self, parser, namespace, values, option_string):
+            overrides = getattr(namespace, self.dest) or []
+            if option_string == '--route':
+                try:
+                    data = json.loads(sys.stdin.read() if values == '-' else Path(values).read_text())
+                except (OSError, json.JSONDecodeError) as error:
+                    parser.error(f'--route: {error}')
+                edges = data.get('edges') if isinstance(data, dict) else data
+                if not isinstance(edges, list):
+                    parser.error('--route expects a JSON list of {"from", "to", "level"} edges')
+                for edge in edges:
+                    if not isinstance(edge, dict) or not edge.get('from') or not edge.get('to'):
+                        parser.error(f'--route: every edge needs "from" and "to": {edge!r}')
+                    item = dict(kind='route', **{'from': edge['from'], 'to': edge['to'], 'level': int(edge.get('level', 0))})
+                    if edge.get('site'):
+                        item['site'] = edge['site']  # only the call written as this text, e.g. "fallback.apply"
+                    overrides.append(item)
+            else:
+                match = re.fullmatch(r'\s*(.+?)\s*->\s*(.+?)\s*(?:@(\d))?', values)
+                if not match:
+                    parser.error(f"{option_string} expects 'CALLER -> CALLEE'" + (" or 'CALLER -> CALLEE@LEVEL'" if option_string == '--branch' else ''))
+                level = 0 if option_string == '--walk' else int(match.group(3) or 1)
+                overrides.append(dict(kind='route', **{'from': match.group(1), 'to': match.group(2), 'level': level}))
+            setattr(namespace, self.dest, overrides)
+
+    parser.add_argument('--route', action=Route, dest='overrides', metavar='FILE|-',
+                        help='The tour route as JSON edges [{"from", "to", "level", "site"?}]: level 0 is the main walk, 1+ optional branches, "site" limits an edge to one call written as that text; unnamed calls stay lazy')
+    parser.add_argument('--walk', action=Route, dest='overrides', metavar="'A -> B'", help='Put one call on the main walk')
+    parser.add_argument('--branch', action=Route, dest='overrides', metavar="'A -> B@N'", help='Offer one call as an optional branch at level N (default 1)')
     parser.add_argument('--rate', action=Override, dest='overrides', metavar='n1.s2=0', help='Rate a call site')
     parser.add_argument('--split', action=Override, dest='overrides', metavar='n1.r1@stmt2', help='Split a region')
     parser.add_argument('--merge', action=Override, dest='overrides', metavar='n1.r1,n1.r2', help='Merge adjacent regions')
@@ -830,6 +861,8 @@ def knowledge_main(command, argv):
     else:
         parser.add_argument('symbol')
     parser.add_argument('--through', action='append', default=[])
+    if command in ('flow', 'explain', 'note'):
+        override_arguments(parser)  # --route/--walk/--branch name the flow to show; the plugin never picks one
     parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
     parser.add_argument('--model')
     parser.add_argument('--budget', type=int, help='Approximate output cap in tokens')
@@ -847,7 +880,7 @@ def knowledge_main(command, argv):
             root = Path(git.stdout.strip()).resolve()
     req = dict(root=str(root), symbol=getattr(args, 'symbol', None), target=getattr(args, 'target', None),
                query=getattr(args, 'query', None), through=args.through, detail=args.detail, model=args.model,
-               budget=args.budget)
+               budget=args.budget, overrides=getattr(args, 'overrides', None))
     req = {k: v for k, v in req.items() if v is not None}
     if command == 'note':
         req['markdown'] = args.file.read_text()

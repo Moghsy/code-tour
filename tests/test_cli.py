@@ -564,7 +564,9 @@ class AstDryRunTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def ast(self, *args):
+    def ast(self, *args, route=None):
+        if route:
+            args = (*args, '--route', str(PLUGIN / 'tests/fixtures/routes' / (route + '.json')))
         return subprocess.run([sys.executable, str(CLI), 'ast', *args, '--project', str(self.root)],
                               capture_output=True, text=True, env=self.env, timeout=300)
 
@@ -573,7 +575,7 @@ class AstDryRunTests(unittest.TestCase):
             self.skipTest('Java parser missing (verification gap)')
 
     def test_outline_text(self):
-        proc = self.ast('OrderService#checkout', '--dry-run')
+        proc = self.ast('OrderService#checkout', '--dry-run', route='checkout')
         self.skip_without_parser(proc)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines = proc.stdout.splitlines()
@@ -581,21 +583,25 @@ class AstDryRunTests(unittest.TestCase):
         self.assertRegex(proc.stdout, r'(?m)^n1 OrderService\.checkout\(Order\) +OrderService\.java:21-39 +deep +write: overview r1-r6$')
         self.assertIn('walk: s5 order.total → n2 [0★]', proc.stdout)
         self.assertIn('sink: s9 http.send (HttpClient)', proc.stdout)
-        self.assertIn('s11 order.markPaid [9 setter main]', proc.stdout)
+        self.assertIn('s11 order.markPaid [9 not in the route]', proc.stdout)
 
     def test_json_and_detail(self):
-        proc = self.ast('Pipeline', '--dry-run', '--json', '--detail', 'overview')
+        proc = self.ast('Pipeline', '--dry-run', '--json', '--detail', 'overview', route='pipeline')
         self.skip_without_parser(proc)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         tour = json.loads(proc.stdout)
         self.assertEqual(tour['detail'], 'overview')
         self.assertEqual(tour['snippets'][0]['symbol'], 'java:shop.route.Pipeline#run(String)')
         self.assertTrue(all(not s['regions'] for s in tour['snippets']), 'overview: no child boxes')
-        self.assertEqual(len(tour['gaps']), 3)
+        self.assertEqual(len(tour['gaps']), 2)
         self.assertTrue(all(r['main'] for r in tour['route'] if r['mode'] == 'walk'))
 
     def test_through(self):
-        proc = self.ast('Pipeline#run', '--dry-run', '--through', 'Pipeline#audit')
+        edges = [e for e in json.loads((PLUGIN / 'tests/fixtures/routes/pipeline.json').read_text())
+                 if not e['to'].endswith('Pipeline#audit(String)')]
+        route = Path(self.tmp.name) / 'no-audit.json'
+        route.write_text(json.dumps(edges))
+        proc = self.ast('Pipeline#run', '--dry-run', '--through', 'Pipeline#audit', '--route', str(route))
         self.skip_without_parser(proc)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('s5 audit → n4 [0★] (--through)', proc.stdout)
@@ -771,7 +777,8 @@ class AstTourTests(unittest.TestCase):
 
     def start(self):
         """Open the checkout tour; returns the outline text and its tour token."""
-        proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, '--force')
+        proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, '--force',
+                            '--route', str(PLUGIN / 'tests/fixtures/routes/checkout.json'))
         match = re.match(r'tour (\S+) · ', proc.stdout)
         self.assertTrue(match, proc.stdout)
         return proc.stdout, match.group(1)

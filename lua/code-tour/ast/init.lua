@@ -14,10 +14,8 @@ M.defaults = {
   store_ttl_days = 180,
   languages = { "java" },
   ignore = {},
-  hints = true,
   max_files = 5000,
   detail = "normal",
-  rating_bands = { 6, 4, 3, 2 },
   cutoffs = nil, -- the table in §8.6 (route.defaults.cutoffs)
   main_cap = 40,
   -- Cross-boundary edges: { { call = "AWSLambda.invoke", to = "OrderHandler#handleRequest" } }
@@ -241,9 +239,7 @@ function M.outline(entries, opts)
     detail = opts.detail or M.options.detail,
     through = opts.through,
     overrides = opts.overrides,
-    hints = opts.hints,
     options = {
-      rating_bands = M.options.rating_bands,
       cutoffs = M.options.cutoffs,
       main_cap = M.options.main_cap,
     },

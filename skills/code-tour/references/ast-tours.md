@@ -18,7 +18,7 @@ The first paragraph of each section is the gist. A snippet-specific fill accepts
 
 ## Query the code graph
 
-- `code-tour flow ENTRY` shows the main flow without opening a tour. `code-tour explain SYMBOL` reads fresh notes and tests.
+- `code-tour flow ENTRY --route route.json` shows the flow you named without opening a tour. `code-tour explain SYMBOL` reads fresh notes and tests.
 - `code-tour callers SYMBOL` lists call sites. `code-tour impact SYMBOL` reports transitive callers, dependent notes, and tests. Use `code-tour path A B` for connections or `code-tour search "TEXT"` to find symbols and notes.
 - Queries use headless Neovim by default. Use `--pane P` when the answer needs the running editor's unsaved buffers. Use `--json` or `--budget N` when you need structured or bounded output.
 - `code-tour note SYMBOL FILE` can write a coding note using the region IDs from `explain` or `flow`. Use current source to verify what the stored notes tell you.

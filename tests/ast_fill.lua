@@ -88,7 +88,7 @@ t.finish("ast fill", function()
   local root = t.project()
   local notes = require("code-tour.ast.notes")
   local store = notes.new()
-  local live = assert(require("code-tour.ast.live").new({ entries = { "OrderService#checkout" }, root = root,
+  local live = assert(require("code-tour.ast.live").new({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root,
     cache_dir = t.cache, store = store }))
   local n1, n2 = live.snippets.n1, live.snippets.n2
   eq(#n1.regions, 6, "n1 has r1-r6 at normal")

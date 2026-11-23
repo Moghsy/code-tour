@@ -7,7 +7,7 @@
 --
 -- Lazy sites (§9.5). The plugin builds the target's regions and its own sites, all
 -- `lazy`, and inserts the snippet in place of the lazy call. The target gets a route-like
--- node of its own (route.R:tree's node shape), rated like the tree rates (labels, trivial,
+-- node of its own (route.R:tree's node shape), rated like the tree rates (labels,
 -- depth-adjusted score) so the outline reads the same, but nothing below it is expanded:
 -- every rated edge is lazy, why its trivial reason or "detail". Edges to a symbol the tour
 -- already shows are `ref` (§8.2: "target on the current path, or already visited"), so
@@ -50,15 +50,13 @@ function M.node(live, target, depth, in_eff)
       for _, t in ipairs(ts) do
         local e = { site = s, target = t.symbol, confidence = t.confidence, via = t.via, choice = #ts > 1 or nil,
           candidates = #ts > 1 and #ts or nil, built = built }
-        local why = rt:trivial(t.symbol)
-        if why then
-          e.rating, e.why = 9, why
-        elseif depth > rt.opts.max_depth then
-          e.rating, e.why = 9, "beyond depth"
+        -- a lazily opened callee offers only what the agent's route names; the rest stays lazy
+        if s.rating_override ~= nil then
+          e.rating = s.rating_override
         else
-          e.s = rt:score(t.symbol, s) / (1 + depth)
-          e.rating = rt:band(e.s)
+          e.rating, e.why = 9, "not in the route"
         end
+        e.s = 0
         e.eff = math.max(e.rating, in_eff)
         node.edges[#node.edges + 1] = e
       end

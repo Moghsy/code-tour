@@ -1,7 +1,8 @@
--- SPEC-ast-graph §8: the main flow (success path, forks, carriers, effects, sinks, gaps,
--- hand-offs, --through, the cap, completeness at every detail); labels; rating bands;
--- effective rating; only the main flow walked; offer cutoffs; budget order; changing
--- detail without re-rating; trivial detection; dispatch with construction tracking.
+-- SPEC-ast-graph §8: the agent's route (success path facts, forks, carriers, effects, sinks,
+-- gaps, hand-offs, --through, the cap, completeness at every detail); labels; effective
+-- rating; only the main flow walked; offer cutoffs; budget order; changing detail without
+-- re-rating; dispatch with construction tracking. The plugin never rates a call itself:
+-- unnamed calls are lazy.
 --   nvim --clean --headless -l tests/ast_route.lua
 local t = dofile(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/ast_common.lua")
 local check, eq = t.check, t.eq
@@ -31,7 +32,10 @@ t.finish("ast route", function()
     return out
   end
   local function tour(specs, opts)
-    return assert(outline.build(idx, type(specs) == "string" and { specs } or specs, opts or {}))
+    opts = vim.deepcopy(opts or {})
+    local spec = type(specs) == "string" and specs or specs[1]
+    opts.overrides = opts.overrides or t.route(spec:match("^Pipeline") and "pipeline" or "checkout")
+    return assert(outline.build(idx, type(specs) == "string" and { specs } or specs, opts))
   end
   local function snippet(tr, label)
     for _, sn in ipairs(tr.snippets) do
@@ -103,26 +107,8 @@ t.finish("ast route", function()
     "a constructor initialising its own fields has no effect")
   check(rt:has_effect(P .. "route.Pipeline#write(Path,String)"), "Files.write is a sink")
 
-  -- trivial targets --------------------------------------------------------------------
-  local function trivial(id)
-    idx:type(id:sub(6):match("^([^#]+)"))
-    return (rt:trivial(id))
-  end
-  eq(trivial(P .. "order.Order#isPaid()"), "accessor", "returns a field")
-  eq(trivial(P .. "order.Order#markPaid()"), "setter", "assigns one field")
-  eq(trivial(P .. "order.OrderService#receipt(Order,Money)"), "factory", "return new T(…)")
-  eq(trivial(P .. "money.Money#Money(long)"), "constructor", "a constructor that only assigns fields")
-  eq(trivial(P .. "util.Formatter#format(Money)"), "delegates to money.format", "forwards its parameter")
-  eq(trivial(P .. "order.Line#item()"), "accessor", "an implicit record accessor")
-  eq(trivial(P .. "route.Report#format(String)"), nil, "a concatenation is not a literal")
-  eq(trivial(P .. "order.Order#total()"), nil, "a loop is not trivial")
-  eq(trivial(P .. "notify.EmailNotifier#send(String,String)"), nil, "forwarding a computed argument is not a delegate")
-
-  -- importance and bands --------------------------------------------------------------------
+  -- complexity (used only to pick the model that writes a box) --------------------------------------------------------------------
   eq(rt:score(P .. "order.Order#total()"), 7 / 5 + 1.5 + 1.5 * 3, "score: lines, a loop, three project sites")
-  eq({ rt:band(6), rt:band(4), rt:band(3), rt:band(2), rt:band(1.9) }, { 1, 2, 3, 4, 5 }, "rating bands")
-  local custom = route.new(idx, { rating_bands = { 10, 8, 6, 4 } })
-  eq(custom:band(7), 3, "ast.rating_bands are tunable")
 
   -- the main flow -------------------------------------------------------------------------
   local ct = tour("OrderService#checkout")
@@ -133,8 +119,7 @@ t.finish("ast route", function()
   eq({ sites(n1, "order.total")[1].mode, sites(n1, "discounts.apply")[1].mode, sites(n1, "gateway.charge")[1].mode },
     { "walk", "walk", "walk" }, "main sites are walked")
   local mark = sites(n1, "order.markPaid")[1]
-  eq({ mark.mode, mark.rating, mark.why, mark.would_main }, { "lazy", 9, "setter", true },
-    "a trivial target with an effect stays lazy, marked main")
+  eq({ mark.mode, mark.rating, mark.why }, { "lazy", 9, "not in the route" }, "a call the route does not name is lazy")
   eq(sites(n1, "failed")[1].mode, "lazy", "a guard's consequence is not on the main flow")
   eq(sites(n1, "result.ok")[1].mode, "accessor", "record accessor label")
   eq(sites(n1, "new IllegalStateException")[1].mode, "unresolved", "built-in label")
@@ -148,8 +133,11 @@ t.finish("ast route", function()
   for _, g in ipairs(pt.gaps) do
     reasons[#reasons + 1] = g.text .. ": " .. g.reason
   end
-  eq(reasons, { "executor.execute: hand-off", "store.save: no implementation in the project",
-    "fallback.apply: 2 implementations, none known to be constructed" }, "gaps")
+  eq(reasons, { "executor.execute: hand-off", "store.save: no implementation in the project" }, "gaps")
+  local named = tour("Pipeline#shapeBoth", { overrides = { { kind = "route", level = 0,
+    from = "Pipeline#shapeBoth", to = "Step#apply" } } })
+  eq(named.gaps[1] and named.gaps[1].reason, "2 implementations; name one in the route",
+    "a route to the interface leaves the choice of implementation as a gap")
   eq(snippet(pt, "Pipeline.decide(int, String)").forks[1].success, "else", "fork listed on its snippet")
 
   -- dispatch with construction tracking (§8.5)
@@ -160,10 +148,6 @@ t.finish("ast route", function()
   local both = snippet(pt, "Pipeline.shapeBoth(String)")
   eq({ sites(both, "shaper.apply")[1].mode, sites(both, "shaper.apply")[1].target },
     { "walk", P .. "route.Trim#apply(String)" }, "a field initialised with `new Trim()`")
-  eq(#sites(both, "fallback.apply"), 2, "an unknown construction keeps both implementations")
-  for _, s in ipairs(sites(both, "fallback.apply")) do
-    check(s.mode ~= "walk" and s.candidates == 2, "several implementations are never walked")
-  end
   local vt = tour("Pipeline#viaParam")
   eq(sites(vt.snippets[2], "with.apply")[1].target, P .. "route.Upper#apply(String)",
     "a parameter: the construction passed by the caller")
@@ -180,10 +164,15 @@ t.finish("ast route", function()
     "a repeated call to the same target reads like the first")
 
   -- --through and the cap
-  local through = tour("Pipeline#run", { through = { "Pipeline#audit" } })
+  local without_audit = vim.tbl_filter(function(op)
+    return op.to ~= "shop.route.Pipeline#audit(String)"
+  end, t.route("pipeline"))
+  local through = tour("Pipeline#run", { through = { "Pipeline#audit" }, overrides = without_audit })
   local audit = sites(through.snippets[1], "audit")[1]
   eq({ audit.mode, audit.main }, { "walk", true }, "--through puts a helper on the main flow")
-  eq(sites(tour("Pipeline#run").snippets[1], "audit")[1].mode, "optional", "without it the helper is an extra")
+  eq(sites(tour("Pipeline#run", { overrides = without_audit }).snippets[1], "audit")[1].mode, "lazy",
+    "without it the unnamed helper is lazy")
+  eq(sites(tour("Pipeline#run").snippets[1], "audit")[1].mode, "optional", "a branch the route names is an extra")
   local capped = tour("OrderService#checkout", { options = { main_cap = 2 } })
   eq(#main_labels(capped), 2, "ast.main_cap bounds the main flow")
   check(capped.warnings[1]:match("capped"), "the cap warns")
@@ -234,6 +223,7 @@ t.finish("ast route", function()
   eq(sites(tight.snippets[1], "audit")[1].why, "budget", "extras past the budget are lazy, why \"budget\"")
 
   -- effective rating over the rated tree: never above the edge that reached the symbol
+  require("code-tour.ast.overrides").route(rt, t.route(), {})
   local flow = rt:main_flow({ checkout }, {})
   local tree = rt:tree({ checkout }, flow)
   local visited = 0

@@ -112,7 +112,7 @@ t.finish("ast store", function()
   restore(root, { callee.file })
   local restored = live(root)
   eq(gist(restored).gist, "Charge the order.", "older callee version reused after switching back")
-  eq(restored:thread(restored.snippets.n1)[1].answer, turn.answer, "original evidence restores the old thread")
+  eq(restored:thread(restored.snippets.n1), {}, "a question about replaced code is removed, not restored")
 
   write(root, callee.file, function(txt) return txt:gsub("Money sum = ", "/* accumulated */ Money   sum = ") end)
   local cosmetic = live(root)

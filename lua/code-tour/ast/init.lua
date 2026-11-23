@@ -150,11 +150,7 @@ function M.analyze(opts)
   if opts.view == "concepts" then
     return M.concepts({ root = opts.root, cache_dir = opts.cache_dir, action = "list" })
   end
-  if opts.view == "kb" then
-    local idx = M.index({ root = opts.root, cache_dir = opts.cache_dir })
-    return require("code-tour.ast.kb").report(idx, require("code-tour.ast.store").new(idx, M.options), graph,
-      { limit = opts.limit, tests = opts.tests })
-  end
+
   local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest)) .. (opts.tests and "+tests" or "")
   local cache = vim.fs.dirname(built.path) .. "/analysis.json"
   local data
@@ -174,6 +170,11 @@ function M.analyze(opts)
     wfd:write(vim.json.encode({ key = key, data = data }))
     wfd:close()
     assert(vim.uv.fs_rename(tmp, cache))
+  end
+  if opts.view == "kb" then
+    local idx = M.index({ root = opts.root, cache_dir = opts.cache_dir })
+    return require("code-tour.ast.kb").report(idx, require("code-tour.ast.store").new(idx, M.options), graph,
+      { limit = opts.limit, tests = opts.tests, communities = data.communities })
   end
   if opts.view == "gods" then
     return { hubs = vim.list_slice(data.hubs, 1, limit), cached = cached }

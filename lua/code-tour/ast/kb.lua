@@ -70,12 +70,11 @@ function M.report(idx, store, graph, opts)
     local symbol = entry.symbol
     local row = symbols[symbol]
     if not row then
-      row = { symbol = symbol, file = entry.file, status = "fresh", regions = 0, details = {}, questions = 0 }
+      row = { symbol = symbol, file = entry.file, status = "fresh", regions = 0, details = {} }
       symbols[symbol] = row
     end
     row.regions = row.regions + 1
     for detail in pairs(version.bodies or {}) do row.details[detail] = true end
-    row.questions = row.questions + #(version.thread or {})
     local fresh, reason = store:is_fresh(version)
     if not fresh then
       row.status = reason == "symbol missing" and "orphaned" or "stale"
@@ -97,8 +96,6 @@ function M.report(idx, store, graph, opts)
     local row = symbols[id]
     row.details = vim.tbl_keys(row.details)
     table.sort(row.details)
-    -- a question asked about code that has changed is kept, but flagged
-    row.questions_stale = row.status ~= "fresh" and row.questions > 0 or nil
     counts[row.status] = counts[row.status] + 1
     if row.status == "stale" then stale_symbols[#stale_symbols + 1] = id end
     rows[#rows + 1] = row
@@ -111,8 +108,30 @@ function M.report(idx, store, graph, opts)
     end
   end
   table.sort(missing)
+  local missing_set = {}
+  for _, id in ipairs(missing) do missing_set[id] = true end
   counts.missing = #missing
   local limit = tonumber(opts.limit) or 15
+  -- Coverage per community: how much of each cluster of related symbols has been explained.
+  -- A fact about the project, in the communities' own order; the agent decides where to go next.
+  local coverage = {}
+  for _, community in ipairs(opts.communities or {}) do
+    local total, written, fresh = 0, 0, 0
+    for _, id in ipairs(community.members) do
+      local row = symbols[id]
+      if row or missing_set[id] then
+        total = total + 1
+        if row then
+          written = written + 1
+          if row.status == "fresh" then fresh = fresh + 1 end
+        end
+      end
+    end
+    if total > 0 then
+      coverage[#coverage + 1] = { community = community.id, name = community.name, symbols = total,
+        explained = written, fresh = fresh }
+    end
+  end
   local concepts = {}
   for _, concept in ipairs(require("code-tour.ast.concepts").list(idx, store)) do
     if concept.stale then concepts[#concepts + 1] = concept.id end
@@ -124,6 +143,7 @@ function M.report(idx, store, graph, opts)
     stale = vim.tbl_filter(function(row) return row.status ~= "fresh" end, rows),
     missing = vim.list_slice(missing, 1, limit),
     missing_total = #missing,
+    coverage = vim.list_slice(coverage, 1, limit),
     stale_concepts = concepts,
   }
 end

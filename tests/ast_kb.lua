@@ -23,10 +23,18 @@ t.finish("ast kb", function()
   live:fill("n1", "## overview\nCharge the order.\n\nCalculate and charge.")
   live:fill("n2", "## overview\nSum the lines.\n\nSum.")
   live:remember()
-  live:save_turn(entry, nil, { question = "Why?", answer = "Because." })
   local fresh = kb()
   eq({ fresh.counts.fresh, fresh.counts.stale }, { 2, 0 }, "written notes are fresh")
   eq(fresh.missing_total, empty.missing_total - 2, "documented symbols leave the missing list")
+
+  check(#fresh.coverage > 0, "coverage is reported per community")
+  local explained, total = 0, 0
+  for _, row in ipairs(kb({ limit = 1000 }).coverage) do
+    explained, total = explained + row.explained, total + row.symbols
+    check(row.fresh <= row.explained and row.explained <= row.symbols, "coverage counts are consistent")
+  end
+  eq(explained, 2, "the two written symbols are counted as explained")
+  check(total > explained, "and the others as not yet explained")
 
   local path = root .. "/src/main/java/shop/order/Order.java"
   local lines = vim.fn.readfile(path)
@@ -39,7 +47,6 @@ t.finish("ast kb", function()
   eq(by[callee.symbol].reason, "code changed", "the edited symbol says why")
   eq(by[entry.symbol].reason, "callee changed", "the caller is stale through its callee")
   eq(by[entry.symbol].changed, { callee.symbol }, "and names the callee that changed")
-  check(by[entry.symbol].questions_stale, "a question about changed code is kept but flagged")
   eq(after.regenerate, { callee.symbol, entry.symbol }, "regenerate callee first")
 
   -- the regenerate list is a valid entry list: a tour over it holds exactly the stale symbols, unwritten

@@ -618,6 +618,8 @@ function Store:update_note(address, note, update)
     version.last_read = os.time()
     update(version)
     table.insert(versions, 1, version)
+    -- Questions belong to the code they were asked about: a newer version drops them from the older ones.
+    for i = 2, #versions do versions[i].thread = nil end
     while #versions > self.max_versions do
       table.remove(versions)
     end

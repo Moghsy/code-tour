@@ -31,6 +31,36 @@ The first paragraph of each section is the gist. A snippet-specific fill accepts
 
 `code-tour concept add NAME --members SYMBOL… --summary TEXT` records a concept: an idea you name and the symbols that implement it, written while you explain code. Concepts go stale member by member when the code changes (`concept list` shows which), appear in `analyze neighbors` and `analyze concepts`, and exist only when you write them: the plugin extracts nothing semantic itself.
 
+## Worked example
+
+Question: "what happens when an order is placed?"
+
+```sh
+# 1. understand: the shape of the project, then the entry's neighbourhood
+code-tour analyze communities --limit 8          # clusters of related symbols
+code-tour analyze neighbors OrderService#checkout # callers and callees, with confidence and via
+code-tour analyze crossings                       # calls that cross a cluster boundary
+
+# 2. design the route yourself and send it (level 0 = main walk, 1-5 = optional branches)
+cat > /tmp/route.json <<'JSON'
+[{"from": "OrderService#checkout", "to": "Order#total", "level": 0},
+ {"from": "Order#total", "to": "Line#subtotal", "level": 0},
+ {"from": "OrderService#checkout", "to": "CardGateway#charge", "level": 0},
+ {"from": "OrderService#checkout", "to": "Notifier#send", "level": 3, "site": "email.send"}]
+JSON
+code-tour ast OrderService#checkout --route /tmp/route.json
+
+# read the outline: a `warning: route …` line means an edge matched no call; a `gap:` is a routed call
+# the code cannot follow. Close a gap with --edge or ast.boundaries, change the route with adjust:
+code-tour adjust --tour T --branch 'OrderService#checkout -> Order#markPaid@2'
+
+# 3. explain, then keep what you learned
+code-tour --fill n1 --tour T --pane P --markdown < n1.md
+code-tour concept add "Order totalling" --members Order#total DiscountPolicy#apply --summary "Sums lines, applies discounts."
+```
+
+A route that names a call by symbol applies to every call site of that callee in the caller; add `"site": "email.send"` (the call as written) to name one. A call you do not name stays lazy, and the reader can still open it.
+
 ## Fill ids, Markdown and partial fills
 
 Fill ids look like `n13`, a snippet of the live tour; anything else is refused before the editor is asked. Pass `--markdown` with `--fill` so the input is never parsed as JSON. A fill that leaves boxes unwritten returns `partial: true`, a `warning` and the `remaining` list, and the CLI repeats the warning on stderr: keep filling until `remaining` is empty.

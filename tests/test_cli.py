@@ -723,6 +723,8 @@ class AstTourTests(unittest.TestCase):
         cls.env.update(XDG_STATE_HOME=str(base / 'state'), XDG_CACHE_HOME=str(base / 'cache'),
                        XDG_DATA_HOME=str(base / 'data'))
         parsers = os.environ.get('CODE_TOUR_PARSER_RUNTIME') or str(Path.home() / '.local/share/nvim/site')
+        # headless CLI runs (no --pane) use the same parsers; the isolated XDG_DATA_HOME hides the installed ones
+        cls.env['CODE_TOUR_PARSER_RUNTIME'] = parsers
         cls.address = str(base / 'editor.sock')
         # the conversation is stubbed: requests the editor sends (e.g. after a detail change) go nowhere
         setup = ('lua vim.opt.rtp:prepend(' + json.dumps(str(PLUGIN)) + '); vim.opt.rtp:append(' + json.dumps(parsers)
@@ -846,6 +848,34 @@ class AstTourTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn(str(wrapper), proc.stdout)
         self.assertNotIn(str(CLI), proc.stdout)
+
+    def test_stale_tour_holds_changed_symbols_callee_first(self):
+        outline, token = self.start()
+        self.run_cli(*self.fill_argv(outline, 'n1')[1:],
+                     data='## overview\nCharge the order.\n\nBody.\n\n## n2\nSum the lines.\n')
+        source = self.root / 'src/main/java/shop/order/Order.java'
+        original = source.read_text()
+        reload = 'local b = vim.fn.bufadd(...); vim.fn.bufload(b); vim.api.nvim_buf_call(b, function() vim.cmd("silent edit!") end)'
+        try:
+            source.write_text(original.replace('return sum;', 'return sum + 0;'))
+            self.assertNotEqual(source.read_text(), original)
+            cli.rpc(self.address, reload, [str(source)])
+            report = json.loads(self.run_cli('analyze', 'kb', '--pane', self.address).stdout)
+            by_symbol = {row['symbol']: row for row in report['stale']}
+            total = 'java:shop.order.Order#total()'
+            checkout = 'java:shop.order.OrderService#checkout(Order)'
+            self.assertEqual(by_symbol[total]['reason'], 'code changed')
+            self.assertEqual(by_symbol[checkout]['reason'], 'callee changed')
+            self.assertLess(report['regenerate'].index(total), report['regenerate'].index(checkout))
+            proc = self.run_cli('ast', '--stale', '--limit', '50', '--pane', self.address, '--force')
+            labels = [line.split()[1] for line in proc.stdout.splitlines() if re.match(r'n\d+ ', line)]
+            self.assertLess(labels.index('Order.total()'), labels.index('OrderService.checkout(Order)'))
+        finally:
+            source.write_text(original)
+            cli.rpc(self.address, reload, [str(source)])
+        # the code matches the notes again: nothing is stale for these two
+        report = json.loads(self.run_cli('analyze', 'kb', '--pane', self.address).stdout)
+        self.assertNotIn('java:shop.order.Order#total()', [row['symbol'] for row in report['stale']])
 
     def test_markdown_and_json_fills(self):
         outline, token = self.start()

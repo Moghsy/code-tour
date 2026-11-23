@@ -88,6 +88,16 @@ In Neovim, run `:CodeTourAst` at the cursor, `:CodeTourDetail detailed` to chang
 
 An agent can inspect the current code with `code-tour explain`, `flow`, `callers`, `impact`, `path`, or `search`. Use `code-tour brief N --tour T` for the code, interfaces, and fill command for one live snippet, and `code-tour --fill N --tour T --model M` to record the model that wrote it.
 
+### How an AST tour is made
+
+The plugin supplies facts and the agent supplies judgement, in three steps:
+
+1. **Understand.** `code-tour codegraph` persists the resolved symbol graph to `.code-tour/graph.json`, reused until a file, the language set or the resolution config changes. `code-tour analyze communities|gods|crossings|neighbors SYMBOL` gives lazy views over it (clusters of related symbols, hub symbols, calls between clusters, callers and callees with their confidence). `code-tour concept add NAME --members …` records a named idea and the symbols that implement it, so later sessions start with that context.
+2. **Design the route.** The plugin never decides what matters. The agent names the flow as edges, `code-tour ast ENTRY --route route.json` with `[{"from": "A#a", "to": "B#b", "level": 0}]`, where level 0 is the main walk and 1 to 5 are optional branches. `--walk 'A -> B'` and `--branch 'A -> B@2'` name single edges, and `code-tour adjust` changes a live tour. A call the route does not name is lazy: the reader can open it, but nothing offers it.
+3. **Explain.** The agent fills the boxes with `code-tour --fill nK`, using the context it gathered.
+
+Calls are bound by receiver type, never by bare name, so an unknown receiver stays unresolved instead of matching an unrelated method. Members generated at build time (Lombok builders, getters, setters, `@With`, `@Singular`, `@Slf4j` loggers and constructors) are synthesized from annotations; add rules for other generators with `ast.synthesizers`, and continue calls the language cannot follow, such as a Lambda invoke, with `ast.boundaries = { { call = "AWSLambda.invoke", to = "OrderHandler#handleRequest" } }`.
+
 When a project test reaches the current snippet, `:CodeTourExample` opens the test as an optional snippet. `:CodeTourRecord` captures locals from the selected Java test if nvim-dap and jdtls are configured with Java Debug and Java Test support. Recording requires project consent. Set `ast.examples.record = false` to disable execution.
 
 ## Tests

@@ -618,15 +618,6 @@ function R:score(id, site)
   if quiet[name] or name:match("^print") then
     score = score - 2
   end
-  if site then
-    local all = #(site.targets or {}) > 0
-    for _, t in ipairs(site.targets or {}) do
-      all = all and t.via == "name-only"
-    end
-    if all then
-      score = score - 2
-    end
-  end
   return score
 end
 

@@ -569,7 +569,7 @@ def graph_main(argv):
 
 
 def codegraph_main(argv):
-    parser = argparse.ArgumentParser(description='Write the project symbol graph (graphify node-link JSON) and print its path')
+    parser = argparse.ArgumentParser(description='Write (or reuse) the persisted project symbol graph, .code-tour/graph.json, and print its path')
     parser.add_argument('--out', help='Output file (default: the persisted .code-tour/graph.json)')
     parser.add_argument('--rebuild', action='store_true', help='Rebuild even when no source file changed')
     parser.add_argument('--project', type=Path, help='Project directory (default: the git top level of the cwd)')

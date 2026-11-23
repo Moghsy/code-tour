@@ -264,6 +264,16 @@ t.finish("ast resolve", function()
       "}",
       "class Other { void uniqueThing() { } }",
     },
+    ["app/Lombok2.java"] = {
+      "package app;",
+      "import lombok.*; import lombok.experimental.Accessors; import lombok.extern.slf4j.Slf4j;",
+      "@Slf4j @Builder(toBuilder = true) @With @Accessors(fluent = true, chain = true) @Setter",
+      "public class Box {",
+      "  @Getter private final String label; private int size; @Singular private java.util.List<String> tags;",
+      "  public static void go(Box b) { b.label(); b.size(3).size(4); b.withLabel(\"x\"); log.info(\"hi\");",
+      "    Box.builder().label(\"l\").tag(\"t\").tags(java.util.List.of()).clearTags().build().toBuilder(); }",
+      "}",
+    },
     ["app/Lombok.java"] = {
       "package app;",
       "import lombok.Builder; import lombok.Getter; import lombok.val;",
@@ -329,6 +339,17 @@ t.finish("ast resolve", function()
   eq(t.targets(t.site(via_val, "p.getName")), { "java:app.Person#getName()" }, "val takes its type from the initializer")
   eq(t.targets(t.site(via_val, "q.isActive")), { "java:app.Person#isActive()" }, "var takes its type from the initializer")
   check(person.symbols["java:app.Person#getName()"].synthetic == "Getter", "generated members are marked synthetic")
+  local box = e.resolver:resolve_file("src/app/Lombok2.java").bodies["java:app.Box#go(Box)"]
+  eq(t.targets(t.site(box, "b.label")), { "java:app.Box#label()" }, "@Accessors(fluent) getter is named after the field")
+  eq(t.targets(t.site(box, "b.size")), { "java:app.Box#size(int)" }, "a class-level @Setter with fluent accessors")
+  eq(t.targets(t.site(box, "b.withLabel")), { "java:app.Box#withLabel(String)" }, "@With")
+  eq(t.site(box, "log.info").unresolved, "library", "@Slf4j gives a library logger, not an unknown receiver")
+  eq(t.targets(t.site(box, "label")), { "java:app.Box.BoxBuilder#label(String)" }, "builder setter")
+  eq(t.targets(t.site(box, "tag")), { "java:app.Box.BoxBuilder#tag(?)" }, "@Singular adds the singular method")
+  eq(t.targets(t.site(box, "tags")), { "java:app.Box.BoxBuilder#tags(List)" }, "@Singular keeps the plural method")
+  eq(t.targets(t.site(box, "clearTags")), { "java:app.Box.BoxBuilder#clearTags()" }, "@Singular adds clear")
+  eq(t.targets(t.site(box, "build")), { "java:app.Box.BoxBuilder#build()" }, "the chain survives @Singular")
+  eq(t.targets(t.site(box, "toBuilder")), { "java:app.Box#toBuilder()" }, "@Builder(toBuilder = true)")
   -- configured boundary: a call the language cannot follow continues at a project symbol
   local ast_options = require("code-tour.ast").options
   ast_options.boundaries = { { call = "Other.nothing", to = "java:app.Other#uniqueThing()" } }

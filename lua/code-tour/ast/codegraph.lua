@@ -1,6 +1,6 @@
--- §15: the symbol graph as graphify-compatible NetworkX node-link JSON. Nodes are
--- symbols; links are graphify's relations, and each call site is its own `calls`
--- link keyed by site id, so the multigraph keeps every call.
+-- §15: the symbol graph as NetworkX node-link JSON. Nodes are symbols; links carry the
+-- relations of §3.4, and each call site is its own `calls` link keyed by site id, so the
+-- multigraph keeps every call.
 local M = {}
 
 local function location(range)
@@ -45,9 +45,6 @@ function M.build(idx, selected)
       kind = sym.kind,
       source = sym.source or "ast",
       signature = sym.signature,
-      -- graphify tells deterministic nodes from LLM ones by this stamp (or by a one-line
-      -- "L<n>" location); without it, "L15-33" nodes would be re-keyed as semantic ones
-      _origin = "ast",
     }
     local facts = idx.loaded[sym.file]
     local body = facts and facts.bodies[id]
@@ -76,7 +73,6 @@ function M.build(idx, selected)
         site_kind = e.kind,
         -- §3.4 calls this field `source`, which node-link reserves for the endpoint
         origin = e.source_kind,
-        _origin = "ast",
       }
     end
   end

@@ -454,36 +454,6 @@ class RPCIntegrationTests(unittest.TestCase):
 
 
 
-def graphify_python():
-    """The interpreter graphify is installed under, or None."""
-    if os.environ.get('GRAPHIFY_PYTHON'):
-        return os.environ['GRAPHIFY_PYTHON']
-    import shutil
-    launcher = shutil.which('graphify')
-    if not launcher:
-        return None
-    first = Path(launcher).read_text(errors='replace').splitlines()[:1]
-    return first[0][2:].strip() if first and first[0].startswith('#!') else None
-
-
-GRAPHIFY_CHECK = r"""
-import json, sys
-from pathlib import Path
-from graphify.build import build_from_json, build
-from graphify.extract import extract
-ours = json.load(open(sys.argv[1])); root = Path(sys.argv[2])
-loaded = build_from_json(ours, directed=True)
-theirs = extract(sorted(root.rglob('*.java')), root=root)
-merged = build([theirs, ours], directed=True)
-print(json.dumps(dict(
-    loaded=loaded.number_of_nodes(),
-    missing=[n['id'] for n in ours['nodes'] if n['id'] not in merged],
-    dangling=[[e['source'], e['target']] for e in ours['links'] if e['source'] not in merged or e['target'] not in merged],
-    files=sorted({n['source_file'] for n in ours['nodes']} - {n['source_file'] for n in theirs['nodes']}),
-)))
-"""
-
-
 class CodeGraphTests(unittest.TestCase):
     """SPEC-ast-graph §15: `code-tour codegraph` over the Java fixture, headless."""
 
@@ -529,21 +499,6 @@ class CodeGraphTests(unittest.TestCase):
                          ('s7', 'dispatch', 'java:shop.payment.CardGateway#charge(Money)'))
         send = [l for l in calls if l['key'] == 's13']
         self.assertEqual(sorted(l['via'] for l in send), ['declared', 'dispatch', 'dispatch'])
-
-    def test_loads_and_merges_with_graphify(self):
-        python = graphify_python()
-        if not python or subprocess.run([python, '-c', 'import graphify'], capture_output=True).returncode:
-            self.skipTest('graphify not installed (verification gap)')
-        self.assertEqual(self.proc.returncode, 0, self.proc.stderr)
-        check = subprocess.run([python, '-I', '-c', GRAPHIFY_CHECK, str(self.out), str(self.root)],
-                               capture_output=True, text=True, cwd=self.root, timeout=300)
-        self.assertEqual(check.returncode, 0, check.stderr)
-        report = json.loads(check.stdout.strip().splitlines()[-1])
-        graph = json.loads(self.out.read_text())
-        self.assertEqual(report['loaded'], len(graph['nodes']))
-        self.assertEqual(report['missing'], [])
-        self.assertEqual(report['dangling'], [])
-        self.assertEqual(report['files'], [])
 
 
 class AstDryRunTests(unittest.TestCase):
@@ -845,6 +800,16 @@ class AstTourTests(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertIn('brief', data)
         self.assertIn('OrderService.checkout(Order)', data['brief'])
+
+    def test_adjust_takes_route_edges(self):
+        outline, token = self.start()
+        self.assertIn('s11 order.markPaid [9 not in the route]', outline)
+        proc = self.run_cli('adjust', '--tour', token, '--pane', self.address,
+                            '--branch', 'OrderService#checkout -> Order#markPaid@2')
+        self.assertRegex(proc.stdout, r'optional: s11 order\.markPaid')
+        proc = self.run_cli('adjust', '--tour', cli.rpc(self.address, 'return require("tour").state().id'),
+                            '--pane', self.address, '--branch', 'OrderService#checkout -> Order#markPaid@9')
+        self.assertIn('s11 order.markPaid [9 ', proc.stdout)
 
     def test_second_ast_is_refused_without_force(self):
         _, token = self.start()

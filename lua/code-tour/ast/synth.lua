@@ -5,19 +5,55 @@
 -- (no body to walk, `implicit = true`, `synthetic = <rule name>`), so the resolver binds
 -- calls through the generated API by receiver type instead of guessing by name.
 --
---   type = { name, qname, kind, annotations = {names}, fields = { {name, type = {spelled}, static?, final?} } }
---   spec = { kind = "method"|"constructor"|"type", name, params = { {name, type} }, returns = spelled,
---            static?, members? (for kind = "type") }
+--   type = { name, qname, kind, annotations = {names}, args = {name -> "(…)" source text},
+--            fields = { {name, type = {name, spelled}, static?, final?, annotations = {names},
+--                        args = {…}} } }
+--   spec = { kind = "method"|"constructor"|"field"|"type", name, params = { {name, type} },
+--            returns = spelled, static?, members? (for kind = "type"), type? (for a field) }
 --
--- Users add rules with setup({ synthesizers = { java = { MyAnnotation = function(type, api) … end } } }).
+-- Rules are keyed by the annotation's simple name and see the whole type, so a class-level
+-- and a field-level annotation (`@Getter` on either) are handled by the same rule. Users
+-- add rules with setup({ synthesizers = { java = { MyAnnotation = function(type, api) … end } } }).
 local M = {}
 
 local function cap(name)
   return name:sub(1, 1):upper() .. name:sub(2)
 end
 
+local function has(list, name)
+  for _, item in ipairs(list or {}) do
+    if item:match("([^.]+)$") == name then
+      return true
+    end
+  end
+  return false
+end
+
+local function flag(args, key)
+  return args and args:match(key .. "%s*=%s*true") ~= nil
+end
+
 local function is_bool(f)
   return f.type and f.type.spelled == "boolean"
+end
+
+-- @Accessors(fluent = true, chain = true) on the type: getters and setters named after the field.
+local function accessors(type)
+  local args = type.args and type.args.Accessors
+  return { fluent = flag(args, "fluent"), chain = flag(args, "chain") or flag(args, "fluent") }
+end
+
+-- The fields a rule applies to: every instance field when `name` is on the type, else the
+-- fields that carry it themselves.
+local function targets(type, name)
+  local out = {}
+  local whole = has(type.annotations, name)
+  for _, f in ipairs(type.fields) do
+    if not f.static and (whole or has(f.annotations, name)) then
+      out[#out + 1] = f
+    end
+  end
+  return out
 end
 
 local function instance(type)
@@ -30,21 +66,27 @@ local function instance(type)
   return out
 end
 
-local function getters(type)
-  local specs = {}
-  for _, f in ipairs(instance(type)) do
-    specs[#specs + 1] = { kind = "method", name = (is_bool(f) and "is" or "get") .. cap(f.name), params = {},
-      returns = f.type and f.type.spelled }
-  end
-  return specs
+local function getter(type, f)
+  local acc = accessors(type)
+  return { kind = "method", name = acc.fluent and f.name or ((is_bool(f) and "is" or "get") .. cap(f.name)),
+    params = {}, returns = f.type and f.type.spelled }
 end
 
-local function setters(type)
+local function setter(type, f)
+  local acc = accessors(type)
+  return { kind = "method", name = acc.fluent and f.name or ("set" .. cap(f.name)),
+    returns = acc.chain and type.name or "void", params = { { name = f.name, type = f.type } } }
+end
+
+local function getters(type)
+  return vim.tbl_map(function(f) return getter(type, f) end, targets(type, "Getter"))
+end
+
+local function setters(type, name)
   local specs = {}
-  for _, f in ipairs(instance(type)) do
+  for _, f in ipairs(targets(type, name or "Setter")) do
     if not f.final then
-      specs[#specs + 1] = { kind = "method", name = "set" .. cap(f.name), returns = "void",
-        params = { { name = f.name, type = f.type } } }
+      specs[#specs + 1] = setter(type, f)
     end
   end
   return specs
@@ -60,16 +102,58 @@ local function constructor(type, only)
   return { kind = "constructor", name = type.name, params = params }
 end
 
+-- `List<String>` -> `String`: the element type a @Singular method takes.
+local function element(f)
+  local inner = f.type and f.type.spelled and f.type.spelled:match("<(.+)>$")
+  if not inner then
+    return nil -- the extractor keeps no type arguments: an untyped parameter binds by arity
+  end
+  inner = inner:match("^([^,]+)") -- a Map's key; its value rides on the same call
+  return { name = inner:match("([^.<]+)$"), spelled = inner }
+end
+
+local function singular(f)
+  local given = f.args and f.args.Singular and f.args.Singular:match('"([^"]+)"')
+  if given then
+    return given
+  end
+  return (f.name:gsub("ies$", "y"):gsub("s$", ""))
+end
+
 local function builder(type)
+  local builder_name = type.name .. "Builder"
   local members = { { kind = "method", name = "build", params = {}, returns = type.qname } }
   for _, f in ipairs(instance(type)) do
-    members[#members + 1] = { kind = "method", name = f.name, returns = type.name .. "Builder",
-      params = { { name = f.name, type = f.type } } }
+    if has(f.annotations, "Singular") then
+      members[#members + 1] = { kind = "method", name = singular(f), returns = builder_name,
+        params = { { name = singular(f), type = element(f) } } }
+      members[#members + 1] = { kind = "method", name = f.name, returns = builder_name,
+        params = { { name = f.name, type = f.type } } }
+      members[#members + 1] = { kind = "method", name = "clear" .. cap(f.name), returns = builder_name, params = {} }
+    else
+      members[#members + 1] = { kind = "method", name = f.name, returns = builder_name,
+        params = { { name = f.name, type = f.type } } }
+    end
   end
-  return {
-    { kind = "type", name = type.name .. "Builder", members = members },
-    { kind = "method", name = "builder", static = true, params = {}, returns = type.name .. "Builder" },
+  local specs = {
+    { kind = "type", name = builder_name, members = members },
+    { kind = "method", name = "builder", static = true, params = {}, returns = builder_name },
   }
+  if flag(type.args and type.args.Builder, "toBuilder") then
+    specs[#specs + 1] = { kind = "method", name = "toBuilder", params = {}, returns = builder_name }
+  end
+  return specs
+end
+
+local function with(type)
+  local specs = {}
+  for _, f in ipairs(targets(type, "With")) do
+    if not f.final or has(type.annotations, "With") or has(f.annotations, "With") then
+      specs[#specs + 1] = { kind = "method", name = "with" .. cap(f.name), returns = type.name,
+        params = { { name = f.name, type = f.type } } }
+    end
+  end
+  return specs
 end
 
 local function concat(...)
@@ -80,21 +164,39 @@ local function concat(...)
   return out
 end
 
+-- A logger field: the annotation names the field `log` and its library type.
+local function logger(spelled)
+  return function()
+    return { { kind = "field", name = "log", static = true, type = { name = spelled:match("([^.]+)$"), spelled = spelled } } }
+  end
+end
 
 M.builtin = {
   java = {
     Getter = getters,
-    Setter = setters,
+    Setter = function(type) return setters(type, "Setter") end,
+    With = with,
     Data = function(type)
-      return concat(getters(type), setters(type), { constructor(type, function(f) return f.final end) })
+      -- @Data is @Getter + @Setter + a required-args constructor on every field
+      local all = vim.tbl_extend("force", {}, type, { annotations = vim.list_extend({ "Getter", "Setter" }, type.annotations) })
+      return concat(getters(all), setters(all), { constructor(type, function(f) return f.final end) })
     end,
     Value = function(type)
-      return concat(getters(type), { constructor(type) })
+      local all = vim.tbl_extend("force", {}, type, { annotations = vim.list_extend({ "Getter" }, type.annotations) })
+      return concat(getters(all), { constructor(type) })
     end,
     Builder = builder,
+    SuperBuilder = builder,
     AllArgsConstructor = function(type) return { constructor(type) } end,
     NoArgsConstructor = function(type) return { constructor(type, function() return false end) } end,
     RequiredArgsConstructor = function(type) return { constructor(type, function(f) return f.final end) } end,
+    Slf4j = logger("org.slf4j.Logger"),
+    Log4j2 = logger("org.apache.logging.log4j.Logger"),
+    Log4j = logger("org.apache.log4j.Logger"),
+    Log = logger("java.util.logging.Logger"),
+    CommonsLog = logger("org.apache.commons.logging.Log"),
+    JBossLog = logger("org.jboss.logging.Logger"),
+    Flogger = logger("com.google.common.flogger.FluentLogger"),
   },
 }
 
@@ -104,20 +206,31 @@ function M.rules(language)
   return vim.tbl_extend("force", M.builtin[language] or {}, user[language] or {})
 end
 
--- Specs for every triggering annotation of `type`, in annotation order. A rule that
--- errors contributes nothing: a broken user rule must not break indexing.
+-- The annotations that can trigger a rule: the type's own and its fields'. A rule runs once
+-- per annotation name, whichever of them carries it.
 function M.specs(language, owner)
   local rules = M.rules(language)
+  local names, seen = {}, {}
+  local function note(list)
+    for _, name in ipairs(list or {}) do
+      local simple = name:match("([^.]+)$")
+      if rules[simple] and not seen[simple] then
+        seen[simple] = true
+        names[#names + 1] = simple
+      end
+    end
+  end
+  note(owner.annotations)
+  for _, f in ipairs(owner.fields) do
+    note(f.annotations)
+  end
   local out = {}
-  for _, name in ipairs(owner.annotations or {}) do
-    local rule = rules[name:match("([^.]+)$")]
-    if rule then
-      local ok, specs = pcall(rule, owner, { cap = cap })
-      if ok and type(specs) == "table" then
-        for _, spec in ipairs(specs) do
-          spec.rule = name
-          out[#out + 1] = spec
-        end
+  for _, simple in ipairs(names) do
+    local ok, specs = pcall(rules[simple], owner, { cap = cap })
+    if ok and type(specs) == "table" then
+      for _, spec in ipairs(specs) do
+        spec.rule = simple
+        out[#out + 1] = spec
       end
     end
   end

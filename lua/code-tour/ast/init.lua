@@ -1,5 +1,5 @@
 -- AST-backed code representation (SPEC-ast-graph.md). Phase 1: extraction, the
--- project index, resolution and the graphify-compatible export. Phase 2: regions (§7),
+-- project index, resolution and the persisted symbol graph. Phase 2: regions (§7),
 -- the route (§8) and the outline as a dry run.
 local M = {}
 local parser_available = require("code-tour.ast.index").parser_available
@@ -88,7 +88,6 @@ function M.index(opts)
   return idx
 end
 
--- §15: write the symbol graph as graphify-compatible node-link JSON.
 -- opts: { root?, out?, cache_dir? } -> { path, nodes, links, files, truncated? }
 -- Agent-authored concepts (the semantic layer): action = "add" | "list" | "remove".
 function M.concepts(opts)
@@ -104,8 +103,8 @@ function M.concepts(opts)
   return { concepts = concepts.list(idx, store) }
 end
 
--- The persisted project graph (`.code-tour/graph.json`, beside the notes store): graphify's
--- node-link format, rebuilt only when a file, the language set or the resolution config changed.
+-- The persisted project graph (`.code-tour/graph.json`, beside the notes store): node-link
+-- JSON, rebuilt only when a file, the language set or the resolution config changed.
 -- Unchanged files are never re-extracted (facts are cached by blob SHA), so a rebuild is
 -- incremental. `manifest` records what the graph was built from; opts.rebuild forces a rebuild.
 local function manifest_of(idx)

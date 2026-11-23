@@ -1,6 +1,6 @@
 -- Projection of the live tour into a graph: one node per snippet, edges for the
 -- reading route (`next`) and optional detours (`optional`). The output is
--- NetworkX node-link JSON, the shape graphify uses, so the two can be merged.
+-- NetworkX node-link JSON, the same shape as the project graph (ast/codegraph.lua).
 -- The tour tree stays the source of truth; nothing here is ever read back.
 local stops = require("code-tour.stops")
 local M = {}

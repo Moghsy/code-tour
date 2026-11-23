@@ -8,7 +8,7 @@ local M = {
   name = "java",
   extensions = { ".java" },
   parser = "java",
-  version = 9, -- bump when the shape of extracted facts changes (invalidates the cache)
+  version = 10, -- bump when the shape of extracted facts changes (invalidates the cache)
 }
 
 M.types = {
@@ -166,20 +166,25 @@ M.type_ref = function(n, src)
 end
 
 local function modifiers(ctx, n)
-  local mods, annotations = {}, {}
+  local mods, annotations, args = {}, {}, {}
   local m = child_of_type(n, "modifiers")
   if m then
     for c in m:iter_children() do
       local t = c:type()
       if t == "marker_annotation" or t == "annotation" then
         local name = field(c, "name")
-        annotations[#annotations + 1] = name and ctx.text(name) or ctx.text(c)
+        local text = name and ctx.text(name) or ctx.text(c)
+        annotations[#annotations + 1] = text
+        local list = field(c, "arguments")
+        if list then
+          args[text:match("([^.]+)$")] = ctx.text(list) -- "(toBuilder = true)", read by synth rules
+        end
       elseif not c:named() then
         mods[ctx.text(c)] = true
       end
     end
   end
-  return mods, annotations
+  return mods, annotations, args
 end
 
 local function type_parameters(ctx, n)
@@ -343,7 +348,7 @@ function M.declarations(file, root, src)
 
   local function add_field(n, owner)
     local ty = type_ref(ctx, field(n, "type"))
-    local mods = modifiers(ctx, n)
+    local mods, field_annotations, field_args = modifiers(ctx, n)
     for decl in n:iter_children() do
       if decl:type() == "variable_declarator" then
         local name_node = field(decl, "name")
@@ -357,7 +362,8 @@ function M.declarations(file, root, src)
         local id = owner.id .. "#" .. name
         local sym = { id = id, kind = "field", name = name, label = owner.name .. "." .. name, file = file,
           range = range(decl), owner = owner.id, type = fty, static = mods.static == true
-            or owner.kind == "interface", volatile = mods.volatile == true, final = mods.final == true, source = "ast" }
+            or owner.kind == "interface", volatile = mods.volatile == true, final = mods.final == true,
+          annotations = field_annotations, annotation_args = field_args, source = "ast" }
         declare(sym)
         owner.fields[name] = id
         local value = field(decl, "value")
@@ -416,12 +422,13 @@ function M.declarations(file, root, src)
     for name, id in pairs(owner.fields) do
       local f = facts.symbols[id]
       if f and not f.enum_constant and not f.component then
-        fields[#fields + 1] = { name = name, type = f.type, static = f.static, final = f.final, line = f.range.start[1] }
+        fields[#fields + 1] = { name = name, type = f.type, static = f.static, final = f.final, line = f.range.start[1],
+          annotations = f.annotations, args = f.annotation_args }
       end
     end
     table.sort(fields, function(a, b) return a.line < b.line end)
     local specs = require("code-tour.ast.synth").specs(M.name, { name = owner.name, qname = owner.qname,
-      kind = owner.kind, annotations = owner.annotations, fields = fields })
+      kind = owner.kind, annotations = owner.annotations, args = owner.annotation_args, fields = fields })
     local function member(holder, spec)
       local keys = {}
       for i, p in ipairs(spec.params or {}) do
@@ -444,7 +451,15 @@ function M.declarations(file, root, src)
       table.insert(holder.methods, id)
     end
     for _, spec in ipairs(specs) do
-      if spec.kind == "type" then
+      if spec.kind == "field" then
+        local id = owner.id .. "#" .. spec.name
+        if not facts.symbols[id] then
+          declare({ id = id, kind = "field", name = spec.name, label = owner.name .. "." .. spec.name, file = file,
+            range = owner.range, owner = owner.id, type = spec.type, static = spec.static == true, implicit = true,
+            synthetic = spec.rule, source = "ast" })
+          owner.fields[spec.name] = id
+        end
+      elseif spec.kind == "type" then
         local qname = owner.qname .. "." .. spec.name
         local id = "java:" .. qname
         if not facts.symbols[id] then
@@ -476,7 +491,7 @@ function M.declarations(file, root, src)
       qname = outer.qname .. "$" .. opts.local_index .. name
     end
     local kind = type_kinds[n:type()]
-    local mods, annotations = modifiers(ctx, n)
+    local mods, annotations, annotation_args = modifiers(ctx, n)
     local sym = {
       id = "java:" .. qname,
       kind = kind,
@@ -495,6 +510,7 @@ function M.declarations(file, root, src)
       components = {},
       modifiers = mods,
       annotations = annotations,
+      annotation_args = annotation_args,
       abstract = mods.abstract == true or kind == "interface",
       error = n:has_error(),
       ["local"] = opts.local_index and true or nil,

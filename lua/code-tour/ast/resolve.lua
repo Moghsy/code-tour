@@ -552,7 +552,7 @@ function R:receiver_type(desc, ctx)
       local m = self.idx:symbol(target.symbol)
       local t = m and self:returns(m) or { kind = "unknown" }
       if target.confidence ~= "EXTRACTED" then
-        t = vim.tbl_extend("force", t, { heuristic = t.heuristic or (target.via == "name-only") })
+        t = vim.tbl_extend("force", t, { heuristic = t.heuristic or true })
       end
       return t, "chain"
     end

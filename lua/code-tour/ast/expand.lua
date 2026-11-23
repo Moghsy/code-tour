@@ -8,8 +8,8 @@
 -- Lazy sites (§9.5). The plugin builds the target's regions and its own sites, all
 -- `lazy`, and inserts the snippet in place of the lazy call. The target gets a route-like
 -- node of its own (route.R:tree's node shape), rated like the tree rates (labels,
--- depth-adjusted score) so the outline reads the same, but nothing below it is expanded:
--- every rated edge is lazy, why its trivial reason or "detail". Edges to a symbol the tour
+-- then the agent's route) so the outline reads the same, but nothing below it is expanded:
+-- every rated edge is lazy, why "not in the route" or "detail". Edges to a symbol the tour
 -- already shows are `ref` (§8.2: "target on the current path, or already visited"), so
 -- expanding them never builds a second snippet with the same id.
 --

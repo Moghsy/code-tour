@@ -370,8 +370,8 @@ local function site_item(s, owners)
   elseif s.built and s.target_label then
     notes[#notes + 1] = "constructed: " .. s.target_label
   end
-  if s.via == "name-only" then
-    notes[#notes + 1] = "via name-only"
+  if s.via == "boundary" then
+    notes[#notes + 1] = "via configured boundary"
   elseif s.via == "through" then
     notes[#notes + 1] = "--through"
   end

@@ -416,6 +416,12 @@ function M.apply(live, n, payload, opts)
     live:apply_edge_notes()
   end
   result.count = #result.boxes
+  if #result.remaining > 0 then
+    -- ready = false with a list reads as success unless the caller checks it: say so.
+    result.partial = true
+    result.warning = ("Partial fill: %d box%s still to write (%s); the tour is not ready"):format(#result.remaining,
+      #result.remaining == 1 and "" or "es", table.concat(result.remaining, ", "))
+  end
   if #refused > 0 then
     result.refused = refused
   end

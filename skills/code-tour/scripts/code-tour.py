@@ -16,4 +16,6 @@ candidates = [Path(explicit)] if explicit else [
 cli = next((path for path in candidates if path.is_file()), candidates[0])
 if not cli.is_file():
     raise SystemExit(f'Code tour CLI not found: {cli}. Set CODE_TOUR_CLI to its installed path.')
+# The CLI prints this path in the commands it hands to agents, so the skill and the outline agree.
+os.environ['CODE_TOUR_ENTRY'] = str(Path(__file__).resolve())
 runpy.run_path(str(cli), run_name='__main__')

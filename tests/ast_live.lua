@@ -54,6 +54,17 @@ t.finish("ast live", function()
   local checkout = "src/main/java/shop/order/OrderService.java"
   local addr = "java:shop.order.OrderService#checkout(Order)/body/"
 
+  -- a second agent-built tour must not silently replace the live one; --force does
+  local live_id = open().id
+  local refused, why = pcall(tour.ast_tour, { entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache,
+    keep_live = true })
+  check(not refused and tostring(why):find("--force", 1, true), "a second ast tour is refused: " .. tostring(why))
+  eq(tour.state().id, live_id, "the live tour survived the refusal")
+  local forced, forced_why = pcall(tour.ast_tour, { entries = { "OrderService#checkout" }, root = root, cache_dir = t.cache })
+  check(forced and tour.state().id ~= live_id, "without keep_live (--force) the tour is replaced: " .. tostring(forced_why))
+  local bad, bad_why = pcall(tour.fill, "13", "## overview\ngist")
+  check(not bad and tostring(bad_why):find("fill ids look like n13", 1, true), "bad fill id: " .. tostring(bad_why))
+
   -- a split keeps every other box id: a fill for r6 handed out before it lands on r6
   local s = open()
   local r6 = select(2, find("n1.r6")).address

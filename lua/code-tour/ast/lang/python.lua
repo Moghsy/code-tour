@@ -1129,26 +1129,6 @@ local function bind(site, sym, target)
     via = target.via or "scope" } }
 end
 
-local function duck(r, site)
-  local stoplist = require("code-tour.ast.resolve").stoplist
-  if not site.name:match("^[%w_]+$") or stoplist[site.name] then
-    return
-  end
-  r.idx:mentioning(site.name)
-  local found
-  for _, sym in pairs(r.idx.symbols) do
-    local owner = sym.owner and r.idx:symbol(sym.owner)
-    if sym.id:match("^python:") and sym.kind == "method" and sym.name == site.name and owner and owner.methods
-        and arity_ok(sym, site, true) then
-      if found then
-        return
-      end
-      found = sym
-    end
-  end
-  return found
-end
-
 function M.resolve_site(r, site, ctx)
   local target = describe(r, site.callee, ctx, site.at, 0)
   if target.kind == "project" and not target.instance then
@@ -1171,13 +1151,7 @@ function M.resolve_site(r, site, ctx)
   elseif target.kind == "builtin" then
     site.unresolved = "builtin"
   else
-    local receiver = describe(r, site.receiver, ctx, site.at, 0)
-    local heuristic = site.callee.k == "field" and receiver.kind == "unknown" and duck(r, site)
-    if heuristic then
-      bind(site, heuristic, { via = "name-only", heuristic = true })
-    else
-      site.unresolved = "dynamic"
-    end
+    site.unresolved = "dynamic"
   end
 end
 

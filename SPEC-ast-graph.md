@@ -326,7 +326,7 @@ An import binds only to a project type whose file declares the imported package 
 ### 5.3 Built-ins and fallbacks
 
 - Built-in names are listed **per language** (`backend.builtins`), never in a shared list, so a project method named `max` keeps its callers.
-- **Name-only fallback**: when a receiver's type is *unknown* (an untyped lambda parameter, an unresolved generic), not merely a library type, a project method unique by name and arity binds as `INFERRED`, `via: name-only`, except for common names (`get`, `set`, `add`, `put`, `apply`, `run`, `call`, `accept`, `test`, `of`, `map`, `size`, `equals`, `hashCode`, `toString`, `close`, `remove`, `contains`, `isEmpty`, `build`).
+- **No name-only fallback**: a call whose receiver type is unknown stays unresolved and is never bound by bare name. Generated members come from `ast/synth.lua`, and configured `ast.boundaries` edges bind as `via: boundary`. (Removed rule: a project method unique by name and arity, except for common names (`get`, `set`, `add`, `put`, `apply`, `run`, `call`, `accept`, `test`, `of`, `map`, `size`, `equals`, `hashCode`, `toString`, `close`, `remove`, `contains`, `isEmpty`, `build`).
 - **Record accessors** (`line.item()`) are `accessor` sites with a `references` edge to the component, not calls. Explicitly declared accessors are ordinary methods.
 
 ### 5.4 Dispatch

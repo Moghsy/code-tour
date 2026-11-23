@@ -22,3 +22,11 @@ The first paragraph of each section is the gist. A snippet-specific fill accepts
 - `code-tour callers SYMBOL` lists call sites. `code-tour impact SYMBOL` reports transitive callers, dependent notes, and tests. Use `code-tour path A B` for connections or `code-tour search "TEXT"` to find symbols and notes.
 - Queries use headless Neovim by default. Use `--pane P` when the answer needs the running editor's unsaved buffers. Use `--json` or `--budget N` when you need structured or bounded output.
 - `code-tour note SYMBOL FILE` can write a coding note using the region IDs from `explain` or `flow`. Use current source to verify what the stored notes tell you.
+
+## Fill ids, Markdown and partial fills
+
+Fill ids look like `n13`, a snippet of the live tour; anything else is refused before the editor is asked. Pass `--markdown` with `--fill` so the input is never parsed as JSON. A fill that leaves boxes unwritten returns `partial: true`, a `warning` and the `remaining` list, and the CLI repeats the warning on stderr: keep filling until `remaining` is empty.
+
+## Resolution limits and configuration
+
+Calls are bound by receiver type only; a call whose receiver type is unknown stays unresolved and is never matched by bare name. Generated members (Lombok `@Builder`, `@Getter`, `@Setter`, `@Data`, `@Value` and constructors) are synthesized from annotations by `ast/synth.lua`; add rules for other generators with `ast.synthesizers = { java = { Annotation = function(type, api) return { specs } end } }`. Continue calls the language cannot follow with `ast.boundaries = { { call = "AWSLambda.invoke", to = "OrderHandler#handleRequest" } }`; such edges are `INFERRED` and print `via configured boundary`.

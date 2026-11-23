@@ -31,8 +31,7 @@ local function test()
   t.eq(t.targets(t.site(facts.bodies[prefix .. "Output.format_payload"], "decorate")),
     { prefix .. "Base.decorate" }, "super dispatch uses the base order")
   local duck = t.site(facts.bodies[prefix .. "dynamic"], "value.format_payload")
-  t.eq(duck.targets[1], { symbol = prefix .. "Output.format_payload", confidence = "INFERRED", via = "name-only" },
-    "unknown receiver keeps the inferred confidence")
+  t.eq({ duck.targets, duck.unresolved }, { {}, "dynamic" }, "unknown receiver is never bound by bare name")
   t.eq(t.site(facts.bodies[prefix .. "shadow"], "normalize").unresolved, "dynamic", "parameter shadows imported name")
   t.check(route.library_call(t.site(facts.bodies[prefix .. "job"], "client.post"),
     require("code-tour.ast.lang.python").sinks), "HTTP call recognized through import alias")

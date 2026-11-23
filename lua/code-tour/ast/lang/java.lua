@@ -8,7 +8,7 @@ local M = {
   name = "java",
   extensions = { ".java" },
   parser = "java",
-  version = 7, -- bump when the shape of extracted facts changes (invalidates the cache)
+  version = 8, -- bump when the shape of extracted facts changes (invalidates the cache)
 }
 
 M.types = {
@@ -357,7 +357,7 @@ function M.declarations(file, root, src)
         local id = owner.id .. "#" .. name
         local sym = { id = id, kind = "field", name = name, label = owner.name .. "." .. name, file = file,
           range = range(decl), owner = owner.id, type = fty, static = mods.static == true
-            or owner.kind == "interface", volatile = mods.volatile == true, source = "ast" }
+            or owner.kind == "interface", volatile = mods.volatile == true, final = mods.final == true, source = "ast" }
         declare(sym)
         owner.fields[name] = id
         local value = field(decl, "value")
@@ -405,6 +405,63 @@ function M.declarations(file, root, src)
         body_members(c, owner)
       elseif t == "static_initializer" or t == "block" then
         pending[#pending + 1] = { id = owner.id, node = c, owner = owner, initializer = true }
+      end
+    end
+  end
+
+  -- Generated members (Lombok and the like): implicit symbols from ast/synth.lua rules,
+  -- skipped where the source declares the same signature itself.
+  local function synthesize(owner)
+    local fields = {}
+    for name, id in pairs(owner.fields) do
+      local f = facts.symbols[id]
+      if f and not f.enum_constant and not f.component then
+        fields[#fields + 1] = { name = name, type = f.type, static = f.static, final = f.final, line = f.range.start[1] }
+      end
+    end
+    table.sort(fields, function(a, b) return a.line < b.line end)
+    local specs = require("code-tour.ast.synth").specs(M.name, { name = owner.name, qname = owner.qname,
+      kind = owner.kind, annotations = owner.annotations, fields = fields })
+    local function member(holder, spec)
+      local keys = {}
+      for i, p in ipairs(spec.params or {}) do
+        keys[i] = p.type and p.type.name or "?"
+      end
+      local id = holder.id .. "#" .. spec.name .. "(" .. table.concat(keys, ",") .. ")"
+      if facts.symbols[id] then
+        return
+      end
+      local params = {}
+      for _, p in ipairs(spec.params or {}) do
+        params[#params + 1] = { name = p.name, type = p.type, range = holder.range }
+      end
+      declare({ id = id, kind = spec.kind, name = spec.name, label = holder.name .. "." .. spec.name .. "(" .. table.concat(keys, ", ") .. ")",
+        file = file, range = holder.range, owner = holder.id, params = params, varargs = false,
+        returns = spec.returns, returns_spelled = spec.returns, modifiers = {}, annotations = {},
+        static = spec.static == true, abstract = false, implicit = true, synthetic = spec.rule,
+        signature = (spec.returns or "") .. " " .. spec.name .. "(" .. table.concat(keys, ", ") .. ")",
+        type_params = {}, source = "ast" })
+      table.insert(holder.methods, id)
+    end
+    for _, spec in ipairs(specs) do
+      if spec.kind == "type" then
+        local qname = owner.qname .. "." .. spec.name
+        local id = "java:" .. qname
+        if not facts.symbols[id] then
+          local nested = { id = id, kind = "class", name = spec.name, qname = qname, label = spec.name, file = file,
+            range = owner.range, outer = owner.id, extends = {}, implements = {}, type_params = {}, fields = {},
+            methods = {}, nested = {}, components = {}, modifiers = { static = true }, annotations = {},
+            abstract = false, implicit = true, synthetic = spec.rule, source = "ast" }
+          declare(nested)
+          owner.nested[spec.name] = id
+          facts.types[qname] = id
+          facts.type_order[#facts.type_order + 1] = id
+          for _, m in ipairs(spec.members or {}) do
+            member(nested, m)
+          end
+        end
+      else
+        member(owner, spec)
       end
     end
   end
@@ -499,6 +556,7 @@ function M.declarations(file, root, src)
         table.insert(sym.methods, id)
       end
     end
+    synthesize(sym)
     return sym
   end
 

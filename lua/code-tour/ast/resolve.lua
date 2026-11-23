@@ -3,7 +3,8 @@
 --
 -- Confidence (§3.4): EXTRACTED when every step followed the language's scoping rules from
 -- declared types, in this file or another; INFERRED when any step was heuristic (a unique
--- project name, name-only matching, dispatch); AMBIGUOUS when several candidates are kept.
+-- project name, dispatch); AMBIGUOUS when several candidates are kept. A call is never bound
+-- by its bare name: without a receiver type it stays unresolved.
 local M = {}
 
 local STOPLIST = {}
@@ -807,42 +808,9 @@ local function unresolved_reason(t, library)
   return "dynamic"
 end
 
--- Name-only fallback (§5.3): a project method unique by name and arity.
-function R:name_only(site, language)
-  if STOPLIST[site.name] then
-    return nil
-  end
-  local key = language .. ":" .. site.name .. "/" .. site.arity
-  if self.named_cache[key] ~= nil then
-    return self.named_cache[key] or nil
-  end
-  self.idx:mentioning(site.name)
-  local found = {}
-  local ids = vim.tbl_keys(self.idx.symbols)
-  table.sort(ids)
-  for _, id in ipairs(ids) do
-    local m = self.idx.symbols[id]
-    if id:sub(1, #language + 1) == language .. ":" and m.kind == "method" and m.name == site.name
-        and arity_ok(m, site.arity) then
-      found[#found + 1] = m
-    end
-  end
-  local result = #found == 1 and found[1] or false
-  self.named_cache[key] = result
-  return result or nil
-end
-
 function R:resolve_on_type(site, ctx, t, via, heuristic, static)
   local name, arity = site.name, site.arity
   if t.kind ~= "project" then
-    if (t.kind == "unknown" or t.kind == "generic") and site.kind ~= "new" then
-      local m = self:name_only(site, ctx.facts.lang)
-      if m then
-        site.targets = { { symbol = m.id, confidence = "INFERRED", via = "name-only" } }
-        site.unresolved = nil
-        return
-      end
-    end
     if (t.kind == "builtin" or t.kind == "unknown") and backend_of(self, ctx.facts).object_methods[name] then
       site.unresolved = "builtin"
       return
@@ -985,6 +953,46 @@ function R:resolve_site(site, ctx)
   return self:resolve_on_type(site, ctx, t, via, t.heuristic, static)
 end
 
+-- Configured cross-boundary edges (ast.boundaries): a call the language cannot follow
+-- (a Lambda invoke, a queue publish, an HTTP client) continues at a project symbol. Each rule is
+-- { call = "Type.method" | "method", to = "Type#method" | {specs}, note? }; `Type` must match the
+-- end of the receiver's type, so `AWSLambda.invoke` never claims an unrelated `invoke`. Only
+-- sites that no project method already resolved are rewritten.
+function R:boundary(site)
+  local rules = require("code-tour.ast").options.boundaries
+  if not rules or #rules == 0 or (site.targets and #site.targets > 0) or not site.name then
+    return
+  end
+  for _, rule in ipairs(rules) do
+    local owner, method = rule.call:match("^(.*)%.([^.]+)$")
+    method = method or rule.call
+    local received = site.receiver_type or site.library_name
+    local type_ok = not owner or (received and (received == owner or received:sub(-#owner - 1) == "." .. owner))
+    if method == site.name and type_ok then
+      self.boundary_cache = self.boundary_cache or {}
+      local key = vim.inspect(rule.to)
+      local ids = self.boundary_cache[key]
+      if ids == nil then
+        ids = {}
+        local rt = require("code-tour.ast.route").new(self.idx)
+        for _, spec in ipairs(type(rule.to) == "table" and rule.to or { rule.to }) do
+          local found = rt:resolve_entry(spec)
+          vim.list_extend(ids, found or {})
+        end
+        self.boundary_cache[key] = ids
+      end
+      if #ids > 0 then
+        site.targets = {}
+        for _, id in ipairs(ids) do
+          site.targets[#site.targets + 1] = { symbol = id, confidence = "INFERRED", via = "boundary", note = rule.note }
+        end
+        site.unresolved, site.boundary = nil, rule.call
+        return
+      end
+    end
+  end
+end
+
 -- Resolve every site in a file (in evaluation order, so chains see their inner calls).
 function R:resolve_file(rel)
   if self.resolved_files[rel] then
@@ -1013,6 +1021,7 @@ function R:resolve_file(rel)
         site.unresolved, site.error = "dynamic", tostring(err)
       end
       site.targets = site.targets or {}
+      self:boundary(site)
       if #site.targets > 0 then
         project_sites = project_sites + 1
       end

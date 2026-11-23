@@ -3,12 +3,12 @@ name: code-tour
 description: Create interactive code tours in Neovim, answer code-tour editor requests, or use the code-tour knowledge commands to answer codebase questions when a repository has a .code-tour/ directory.
 ---
 
-Use `python3 <skill-dir>/scripts/code-tour.py` for commands written as `code-tour` below. The CLI sends the tour directly to Neovim. Leave source files untouched when presenting or replying to a tour.
+Use `python3 <skill-dir>/scripts/code-tour.py` for commands written as `code-tour` below. The outline prints fill commands that name this same script. The CLI sends the tour directly to Neovim. Leave source files untouched when presenting or replying to a tour.
 
 ## Start a tour
 
 1. Run `code-tour ast ENTRY` from the project root with a symbol or `file:line`. The editor shows the route and the CLI returns the outline of boxes that need prose.
-2. Read the source and fill pending boxes in walk order, starting at the reader's position. Use the returned region IDs and fill commands. Write one Markdown section per box with a gist in the first paragraph and the explanation after it. See [AST fills, examples, and knowledge queries](references/ast-tours.md).
+2. A second `code-tour ast` is refused while a tour is live; pass `--force` to replace it, or use `code-tour adjust`. Several entries may be given (`code-tour ast A B`), and `ast.boundaries` continues calls the language cannot follow. Read the source and fill pending boxes in walk order, starting at the reader's position. Use the returned region IDs and fill commands. Write one Markdown section per box with a gist in the first paragraph and the explanation after it. See [AST fills, examples, and knowledge queries](references/ast-tours.md).
 3. If the CLI reports a fallback, write JSON stops and send them with `code-tour --file PATH`. Use that workflow for a diff review or a tour of specific ranges too. See [authored stop schemas, examples, and streaming](references/authored-tours.md).
 
 ## Choose the main flow

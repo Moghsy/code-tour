@@ -1286,6 +1286,12 @@ function M.ast_tour(request)
   if request.auto and not request.recipe and (not request.entries or #request.entries == 0) then
     return ast.outline({}, request)
   end
+  if request.keep_live and s.ast and s.id then
+    -- A second `code-tour ast` would silently discard the live tour and the reader's place in it.
+    local sn = s.ast.snippets and s.ast.snippets.n1
+    error(("A live AST tour (%s%s) is open; adjust it with `code-tour adjust --tour %s`, or pass --force to replace it")
+      :format(s.id, sn and sn.label and (" · " .. sn.label) or "", s.id), 0)
+  end
   local live, err = require("code-tour.ast.live").new(request)
   if not live then
     local fallback = ast.fallback_reason(err)
@@ -2165,6 +2171,11 @@ function M.fill(id, input, opts)
   opts = opts or {}
   if s.ast and type(id) == "string" and id:match("^n%d+$") and not s.pending[id] then
     return ast_fill(id, input, opts)
+  end
+  if not s.pending[id] and not (type(id) == "string" and id:match("^n%d+$") and s.ast) then
+    local hint = s.ast and ("fill ids look like n13 (a snippet of the open AST tour, from its outline)")
+      or "fill ids are the request ids the editor sent"
+    error(("Unknown fill id %q: %s; or the explain request is already complete"):format(tostring(id), hint), 0)
   end
   local request = assert(s.pending[id], "Unknown or completed explain request " .. tostring(id))
   -- A streamed snippet is written where its placeholder is, so the route never changes behind the reader.

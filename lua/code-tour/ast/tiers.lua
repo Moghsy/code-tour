@@ -16,7 +16,7 @@ local function complicated(stmts, in_catch)
   return false
 end
 
-local uncertain = { dispatch = true, ["name-only"] = true, agent = true }
+local uncertain = { dispatch = true, boundary = true, agent = true }
 
 function M.classify(rt, node, sites)
   local body, sym = node.body, node.sym

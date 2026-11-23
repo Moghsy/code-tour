@@ -18,6 +18,11 @@ import tempfile
 import time
 
 
+def entry_path():
+    """The command agents are told to run: the skill wrapper that launched us, else this file."""
+    return os.environ.get('CODE_TOUR_ENTRY') or str(Path(__file__).resolve())
+
+
 def herdr(*args, session=None):
     argv = [os.environ.get('HERDR_BIN_PATH', 'herdr')]
     if session:
@@ -367,10 +372,16 @@ def read_stops(args):
                                note=f'{path}:{first}-{last or first}'))
         return result
     text = Path(args.file).read_text() if args.file else sys.stdin.read()
+    if getattr(args, 'markdown', False):
+        return text
     if getattr(args, 'fill', None) and re.fullmatch(r'n\d+', args.fill) and not text.lstrip().startswith(('{', '[')):
         # AST fills are Markdown, one section per box (SPEC-ast-graph §9.3)
         return text
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        hint = ' (pass --markdown to send Markdown sections)' if getattr(args, 'fill', None) else ''
+        raise RuntimeError(f'Input is not valid JSON: {error}{hint}') from error
 
 
 def resolve_stops(items, root):
@@ -523,7 +534,7 @@ def saved_main(argv):
         opts.update({k: v for k, v in dict(title=args.title, overwrite=args.overwrite, revision=args.revision).items() if v is not None})
         result = deliver(target, 'save_saved', [opts], timeout=15)
     else:
-        opts.update(repositories=dict(args.repo), files=args.map_file, cli=str(Path(__file__).resolve()))
+        opts.update(repositories=dict(args.repo), files=args.map_file, cli=entry_path())
         opts['standalone'] = args.standalone or bool(args.lazy_agent)
         if args.lazy_agent:
             opts['lazy_agent'] = dict(kind=args.lazy_agent, session=target.get('session'), pane_id=target.get('pane_id'), root=str(roots[0] if roots else Path.cwd()))
@@ -588,6 +599,7 @@ def ast_main(argv):
     override_arguments(parser)
     parser.add_argument('--through', action='append', default=[], help='A symbol the main flow must pass through (repeatable)')
     parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
+    parser.add_argument('--force', action='store_true', help='Replace the live tour (otherwise a second `ast` is refused)')
     parser.add_argument('--dry-run', action='store_true', help='Print the outline; open nothing')
     parser.add_argument('--json', action='store_true', help='Print JSON: the derived tour (--dry-run) or the show result')
     parser.add_argument('--project', type=Path, help='Project directory (default: the git top level of the cwd)')
@@ -617,7 +629,8 @@ def ast_main(argv):
         target = choose(instances(), args.pane, key, root, [])
         if target is None:
             target = launch(root)
-        request['cli'] = str(Path(__file__).resolve())
+        request['cli'] = entry_path()
+        request['keep_live'] = not args.force
         current_origin = origin(args, root)
         if current_origin is not None:
             request['origin'] = current_origin
@@ -957,6 +970,7 @@ def main(argv=None):
     mode.add_argument('--show', action='store_true', help='Default mode')
     mode.add_argument('--answer', nargs='?', const='', metavar='S.K')
     mode.add_argument('--fill', metavar='ID')
+    parser.add_argument('--markdown', action='store_true', help='--fill: the input is Markdown sections, never parsed as JSON')
     parser.add_argument('--append', action='store_true')
     parser.add_argument('--review', action='store_true', default=None, help='Show additions and removed virtual lines (show or fill)')
     parser.add_argument('--base', help='Git review base, default HEAD')
@@ -976,6 +990,10 @@ def main(argv=None):
     parser.add_argument('--list', action='store_true')
     parser.add_argument('ranges', nargs='*', metavar='FILE:LINE-END')
     args = parser.parse_args(argv)
+    if args.fill and not re.fullmatch(r'n\d+|[0-9a-f]{16}', args.fill):
+        parser.error(f'invalid fill id {args.fill!r}: fill ids look like n13 (a snippet from the outline)')
+    if args.markdown and not args.fill:
+        parser.error('--markdown requires --fill')
     if (args.after is not None or args.into) and not args.fill:
         parser.error('--after/--into require --fill')
     if (args.detail or args.model) and not args.fill:
@@ -1020,7 +1038,7 @@ def main(argv=None):
         # Large nested tours exceed msgpack-RPC's nesting limit, so the editor reads the file itself.
         path = tour_file(args, data)
         opts = dict(root=str(root), append=args.append, review=args.review, base=args.base,
-                    origin=origin(args, root), cli=str(Path(__file__).resolve()),
+                    origin=origin(args, root), cli=entry_path(),
                     tour_file=None if args.append else path)
         opts = {key: value for key, value in opts.items() if value is not None}
         result = rpc(target['address'], 'return require("tour").show_file(...)', [path, opts], timeout=15)
@@ -1033,6 +1051,8 @@ def main(argv=None):
             print(json.dumps(dict(result=result, focused=False, error=str(error))))
             return 1
     print(json.dumps(result))
+    if isinstance(result, dict) and result.get('warning'):
+        print('warning: ' + result['warning'], file=sys.stderr)
     return 0
 
 

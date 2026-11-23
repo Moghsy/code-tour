@@ -20,6 +20,10 @@ M.defaults = {
   rating_bands = { 6, 4, 3, 2 },
   cutoffs = nil, -- the table in §8.6 (route.defaults.cutoffs)
   main_cap = 40,
+  -- Cross-boundary edges: { { call = "AWSLambda.invoke", to = "OrderHandler#handleRequest" } }
+  boundaries = {},
+  -- Generated members: { java = { MyAnnotation = function(type, api) return { specs } end } } (ast/synth.lua)
+  synthesizers = {},
 }
 M.options = vim.deepcopy(M.defaults)
 

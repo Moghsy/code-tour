@@ -771,7 +771,7 @@ class AstTourTests(unittest.TestCase):
 
     def start(self):
         """Open the checkout tour; returns the outline text and its tour token."""
-        proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address)
+        proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, '--force')
         match = re.match(r'tour (\S+) · ', proc.stdout)
         self.assertTrue(match, proc.stdout)
         return proc.stdout, match.group(1)
@@ -807,6 +807,42 @@ class AstTourTests(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertIn('brief', data)
         self.assertIn('OrderService.checkout(Order)', data['brief'])
+
+    def test_second_ast_is_refused_without_force(self):
+        _, token = self.start()
+        proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, expected=1)
+        self.assertIn('--force', proc.stderr)
+        self.assertEqual(cli.rpc(self.address, 'return require("tour").state().id'), token)
+        self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, '--force')
+        self.assertNotEqual(cli.rpc(self.address, 'return require("tour").state().id'), token)
+
+    def test_bad_fill_id_is_named_before_the_editor_is_asked(self):
+        _, token = self.start()
+        proc = self.run_cli('--fill', '13', '--tour', token, '--pane', self.address, data='## overview\nx\n', expected=2)
+        self.assertIn('fill ids look like n13', proc.stderr)
+
+    def test_markdown_flag_never_parses_json(self):
+        outline, token = self.start()
+        text = '[a link-first](x) paragraph.\n'
+        proc = self.run_cli('--fill', 'n1', '--tour', token, '--pane', self.address, '--markdown', data='## overview\n' + text)
+        self.assertEqual(json.loads(proc.stdout)['boxes'], ['n1 overview'])
+        proc = self.run_cli('--fill', 'n1', '--tour', token, '--pane', self.address, data='{broken', expected=1)
+        self.assertIn('--markdown', proc.stderr)
+
+    def test_partial_fill_warns(self):
+        _, token = self.start()
+        proc = self.run_cli('--fill', 'n1', '--tour', token, '--pane', self.address, '--markdown', data='## overview\nOnly this.\n')
+        self.assertTrue(json.loads(proc.stdout)['partial'])
+        self.assertIn('warning: Partial fill', proc.stderr)
+
+    def test_outline_names_the_wrapper_it_was_started_through(self):
+        wrapper = PLUGIN / 'skills/code-tour/scripts/code-tour.py'
+        env = dict(self.env, CODE_TOUR_CLI=str(CLI))
+        proc = subprocess.run([sys.executable, str(wrapper), 'ast', 'OrderService#checkout', '--pane', self.address, '--force'],
+                              capture_output=True, text=True, cwd=self.root, env=env, timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(str(wrapper), proc.stdout)
+        self.assertNotIn(str(CLI), proc.stdout)
 
     def test_markdown_and_json_fills(self):
         outline, token = self.start()

@@ -121,8 +121,8 @@ t.finish("ast resolve", function()
   eq(t.site(describe, "item").kind, "accessor", "bare accessor inside the record")
 
   -- §5.3 built-ins and fallbacks
-  eq(bound(t.site(audit, "line.describe")), { { "order.Line#describe()", "INFERRED", "name-only" } },
-    "untyped lambda parameter: unique name binds")
+  eq(bound(t.site(audit, "line.describe")), {}, "untyped lambda parameter: never bound by bare name")
+  eq(t.site(audit, "line.describe").unresolved, "dynamic", "untyped lambda parameter stays unresolved")
   eq(t.site(audit, "line.size").unresolved, "dynamic", "stoplisted name stays unresolved")
   local email = t.body(idx, "shop/notify/EmailNotifier.java", P .. "notify.EmailNotifier#send(String,String)")
   eq(t.site(email, "System.out.println").unresolved, "builtin", "System.out is built-in")
@@ -264,6 +264,16 @@ t.finish("ast resolve", function()
       "}",
       "class Other { void uniqueThing() { } }",
     },
+    ["app/Lombok.java"] = {
+      "package app;",
+      "import lombok.Builder; import lombok.Getter;",
+      "@Builder @Getter",
+      "public class Person {",
+      "  private String name; private boolean active;",
+      "  public static void use() { Person p = Person.builder().name(\"x\").active(true).build(); p.getName(); p.isActive(); }",
+      "  public String name(String other) { return other; }",
+      "}",
+    },
   }
   for rel, lines in pairs(files) do
     local path = edge .. "/src/" .. rel
@@ -279,7 +289,7 @@ t.finish("ast resolve", function()
   check(has(e.resolver:edges("src/app/ItemHandler.java"), "java:app.ItemHandler#handle(Item)", "java:app.Handler#handle(T)",
     "overrides"), "overrides through a type variable")
   eq(t.targets(t.site(run, "compute")), { "java:com.acme.util.Util#compute(int)" }, "fully qualified static call")
-  eq(t.site(run, "compute").targets[1].via, "static", "qualified call is static, not name-only")
+  eq(t.site(run, "compute").targets[1].via, "static", "qualified call is static")
   eq(t.targets(t.site(run, "log", 1)), { "java:com.acme.util.Util#log()" }, "fully qualified void call")
   local made = t.site(run, "new java.util.ArrayList")
   eq(made.range, { start = { 9, 18 }, ["end"] = { 9, 41 } }, "new badge text matches its range")
@@ -302,8 +312,30 @@ t.finish("ast resolve", function()
   eq(outer_super.range, { start = { 18, 28 }, ["end"] = { 18, 39 } }, "Outer.super badge range")
   eq(t.targets(t.site(inner, "Shape.super.hi")), { "java:app.Shape#hi()" }, "Interface.super.m()")
   local each = e.resolver:resolve_file("src/app/App.java").bodies["java:app.App#each(T)"]
-  eq(bound(t.site(each, "t.uniqueThing")), { { "java:app.Other#uniqueThing()", "INFERRED", "name-only" } },
-    "generic receiver falls back to name-only")
+  eq(bound(t.site(each, "t.uniqueThing")), {}, "generic receiver is not bound by bare name")
+  eq(t.site(each, "t.uniqueThing").unresolved, "generic", "generic receiver stays unresolved")
+  -- generated members (ast/synth.lua): resolved by receiver type, never by bare name
+  local person = e.resolver:resolve_file("src/app/Lombok.java")
+  local use = person.bodies["java:app.Person#use()"]
+  eq(t.targets(t.site(use, "Person.builder")), { "java:app.Person#builder()" }, "@Builder gives a static builder()")
+  eq(t.targets(t.site(use, "name")), { "java:app.Person.PersonBuilder#name(String)" },
+    "a builder setter binds to the builder, not the unrelated Person#name(String)")
+  eq(t.targets(t.site(use, "active")), { "java:app.Person.PersonBuilder#active(boolean)" }, "chained builder setter")
+  eq(t.targets(t.site(use, "build")), { "java:app.Person.PersonBuilder#build()" }, "build() binds on the builder")
+  eq(t.targets(t.site(use, "p.getName")), { "java:app.Person#getName()" }, "@Getter accessor")
+  eq(t.targets(t.site(use, "p.isActive")), { "java:app.Person#isActive()" }, "@Getter boolean accessor")
+  check(person.symbols["java:app.Person#getName()"].synthetic == "Getter", "generated members are marked synthetic")
+  -- configured boundary: a call the language cannot follow continues at a project symbol
+  local ast_options = require("code-tour.ast").options
+  ast_options.boundaries = { { call = "Other.nothing", to = "java:app.Other#uniqueThing()" } }
+  local fresh = t.index(edge)
+  local not_matched = fresh.resolver:resolve_file("src/app/App.java").bodies["java:app.App#each(T)"]
+  eq(t.site(not_matched, "t.uniqueThing").unresolved, "generic", "a rule for another call does not claim this one")
+  ast_options.boundaries = { { call = "uniqueThing", to = "java:app.Other#uniqueThing()" } }
+  local hopped = t.index(edge).resolver:resolve_file("src/app/App.java").bodies["java:app.App#each(T)"]
+  eq(bound(t.site(hopped, "t.uniqueThing")), { { "java:app.Other#uniqueThing()", "INFERRED", "boundary" } },
+    "a configured boundary binds an otherwise unresolved call")
+  ast_options.boundaries = {}
   local pair = e:facts("src/app/Pair.java")
   local acc = pair.symbols["java:app.Pair#left()"]
   check(acc and acc.implicit and acc.accessor == "java:app.Pair#left", "implicit accessor symbol for a component")

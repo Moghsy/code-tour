@@ -275,6 +275,11 @@ render = function(jump)
       end)
     end, nil, s.opts.smooth_scroll)
   else
+    -- The box grows or shrinks in place (answers, pages). When it sits above the view's top line, keep
+    -- all of its rows in view; a stale topfill would cut the top of the box off, notably at line 1.
+    if layout.above and saved.topline == layout.first and (saved.topfill or 0) > 0 then
+      saved.topfill = virtual_count
+    end
     vim.api.nvim_win_call(s.win, function()
       vim.fn.winrestview(saved)
     end)
@@ -1682,6 +1687,7 @@ function M.ask(question, action, selected)
     end
     render(false)
   end)
+  s.page = "latest"
   render(false)
   return prompt
 end
@@ -1715,6 +1721,7 @@ function M.answer(text, id)
     local sn, region = s.ast:resolve_anchor(target.box.anchor)
     if sn then s.ast:save_turn(sn, region, target.turn) end
   end
+  if select(2, current()) == target.box then s.page = "latest" end
   if not typing() then
     render(false)
   end

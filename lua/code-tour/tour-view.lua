@@ -146,20 +146,36 @@ local function footer_hint(width, branch, nested)
   end
 end
 
-local function thread_lines(box)
-  local thread = {}
-  if box._saved and box._saved.status ~= "ready" then return thread end
+-- One entry per turn, so a page never mixes two questions.
+local function thread_turns(box)
+  local turns = {}
+  if box._saved and box._saved.status ~= "ready" then return turns end
   for _, turn in ipairs(box.thread) do
-    thread[#thread + 1] = "**Q:** " .. turn.question
+    local lines = { "**Q:** " .. turn.question }
     if turn.answer then
       -- Block-level answers (headings, lists, code) start below the label.
       local block = turn.answer:match("^%s*[#>|`~]") or turn.answer:match("^%s*[-*+] ") or turn.answer:match("^%s*%d+[.)] ")
-      thread[#thread + 1] = (block and "**A:**\n" or "**A:** ") .. turn.answer
+      lines[#lines + 1] = (block and "**A:**\n" or "**A:** ") .. turn.answer
     else
-      thread[#thread + 1] = turn.error and ("*Delivery:* " .. turn.error) or "*Waiting for answer…*"
+      lines[#lines + 1] = turn.error and ("*Delivery:* " .. turn.error) or "*Waiting for answer…*"
     end
+    turns[#turns + 1] = table.concat(lines, "\n\n")
   end
-  return thread
+  return turns
+end
+
+local function thread_lines(box)
+  return thread_turns(box)
+end
+
+-- Pages for the whole thread: each turn is paginated on its own. Returns pages, first page of each turn.
+local function thread_pages(box, width, height)
+  local pages, firsts = {}, {}
+  for _, text in ipairs(thread_turns(box)) do
+    firsts[#firsts + 1] = #pages + 1
+    vim.list_extend(pages, markdown.pages(text, width, height))
+  end
+  return pages, firsts
 end
 
 function M.build(state, stop, box)
@@ -187,9 +203,12 @@ function M.build(state, stop, box)
   local notes = markdown.pages(note, width - 4, note_capacity)
   state.note_page = math.max(1, math.min(state.note_page or 1, #notes))
   local thread = thread_lines(box)
-  local qa = has_qa
-      and markdown.pages(table.concat(thread, "\n\n"), width - 4, math.max(1, budget - #notes[state.note_page]))
-    or nil
+  local qa, firsts
+  if has_qa then
+    qa, firsts = thread_pages(box, width - 4, math.max(1, budget - #notes[state.note_page]))
+  end
+  -- "latest" lands on the newest question, so a fresh answer is never hidden behind older ones.
+  if state.page == "latest" then state.page = firsts and firsts[#firsts] or 1 end
   state.page = qa and math.max(1, math.min(state.page or 1, #qa)) or 1
   state.note_pages, state.qa_pages = #notes, qa and #qa or 1
   local rows = { { { "", "Normal" } } }

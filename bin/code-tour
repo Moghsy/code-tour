@@ -595,7 +595,7 @@ def codegraph_main(argv):
 def analyze_main(argv):
     parser = argparse.ArgumentParser(prog='code-tour analyze',
         description='Lazy views over the persisted project graph: communities, hub symbols, community crossings, neighbors')
-    parser.add_argument('view', choices=('communities', 'gods', 'crossings', 'neighbors', 'concepts'))
+    parser.add_argument('view', choices=('communities', 'gods', 'crossings', 'neighbors', 'concepts', 'kb'))
     parser.add_argument('symbol', nargs='?', help='neighbors: the symbol id, label or a part of its id')
     parser.add_argument('--limit', type=int, default=15)
     parser.add_argument('--members', action='store_true', help='communities: list every member symbol')

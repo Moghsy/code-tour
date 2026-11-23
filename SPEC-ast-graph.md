@@ -815,6 +815,8 @@ Members generated at build time (Lombok `@Builder`, `@Getter`, `@Setter`, `@Data
 
 `code-tour concept add NAME --members SYMBOL… [--summary TEXT]`, `concept list` and `concept remove ID` keep **concepts**, the semantic layer: the agent names an idea and the symbols that implement it while it explains code. A concept is a hyperedge over the graph stored in `concepts.json`; each member keeps a fingerprint of its source, so a concept turns stale member by member when the code changes (`fresh`, `stale`, `missing`). The plugin extracts nothing semantic itself. `analyze concepts` lists them.
 
+**Knowledge base view (`analyze kb`).** Graph, notes and concepts stay separate files and share one key, the symbol id; `kb.lua` joins them at read time, copying nothing. Per symbol the newest note version of each region is checked with the store's own freshness test, giving `fresh`, `stale` (`code changed`, or `callee changed` with the changed callees listed, from the callee fingerprints recorded in the note's evidence), `orphaned` (symbol missing) or `missing` (a function, method, constructor or type in the graph with no note; test code excluded unless `--tests`). Q&A threads live with their note version, so a thread on a stale note is reported as `questions_stale`. `regenerate` orders the stale symbols callee first (a depth-first walk over the graph's call links, cycle-safe). Fresh notes are reused untouched, so a tour or an answer regenerates only what the report names.
+
 ## 16. Commands, RPC and options
 
 | CLI | RPC | Does |

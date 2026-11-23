@@ -266,11 +266,12 @@ t.finish("ast resolve", function()
     },
     ["app/Lombok.java"] = {
       "package app;",
-      "import lombok.Builder; import lombok.Getter;",
+      "import lombok.Builder; import lombok.Getter; import lombok.val;",
       "@Builder @Getter",
       "public class Person {",
       "  private String name; private boolean active;",
       "  public static void use() { Person p = Person.builder().name(\"x\").active(true).build(); p.getName(); p.isActive(); }",
+      "  public static void viaVal() { val p = Person.builder().build(); p.getName(); var q = Person.builder().build(); q.isActive(); }",
       "  public String name(String other) { return other; }",
       "}",
     },
@@ -324,6 +325,9 @@ t.finish("ast resolve", function()
   eq(t.targets(t.site(use, "build")), { "java:app.Person.PersonBuilder#build()" }, "build() binds on the builder")
   eq(t.targets(t.site(use, "p.getName")), { "java:app.Person#getName()" }, "@Getter accessor")
   eq(t.targets(t.site(use, "p.isActive")), { "java:app.Person#isActive()" }, "@Getter boolean accessor")
+  local via_val = person.bodies["java:app.Person#viaVal()"]
+  eq(t.targets(t.site(via_val, "p.getName")), { "java:app.Person#getName()" }, "val takes its type from the initializer")
+  eq(t.targets(t.site(via_val, "q.isActive")), { "java:app.Person#isActive()" }, "var takes its type from the initializer")
   check(person.symbols["java:app.Person#getName()"].synthetic == "Getter", "generated members are marked synthetic")
   -- configured boundary: a call the language cannot follow continues at a project symbol
   local ast_options = require("code-tour.ast").options

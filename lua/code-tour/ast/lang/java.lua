@@ -8,7 +8,7 @@ local M = {
   name = "java",
   extensions = { ".java" },
   parser = "java",
-  version = 8, -- bump when the shape of extracted facts changes (invalidates the cache)
+  version = 9, -- bump when the shape of extracted facts changes (invalidates the cache)
 }
 
 M.types = {
@@ -749,14 +749,18 @@ function M.bodies(file, src, facts, pending)
       end
     end
   end
+  -- `var`, and Lombok's `val` when no project type of that name exists, take their type from the initializer
+  local function inferred(ty)
+    return ty and (ty.name == "var" or (ty.name == "val" and not facts.names.val)) or false
+  end
   local function declare(name_node, ty, kind, scope_node, extra)
     local name = ctx.text(name_node)
     local r = range(scope_node)
     local loc = vim.tbl_extend("force", {
       name = name,
-      type = ty and ty.name ~= "var" and ty.name or nil,
-      spelled = ty and ty.name ~= "var" and ty.spelled or nil,
-      var = ty and ty.name == "var" or nil,
+      type = ty and not inferred(ty) and ty.name or nil,
+      spelled = ty and not inferred(ty) and ty.spelled or nil,
+      var = inferred(ty) or nil,
       kind = kind,
       declared_at = range(name_node).start,
       scope = { start = range(name_node).start, ["end"] = r["end"] },

@@ -221,6 +221,45 @@ function Index:rel(path)
   return path
 end
 
+-- The git checkout that holds `rel`, and the path inside it: the workspace repository, or the
+-- project's own repository. Nil when the file is under no git checkout.
+function Index:git_dir(rel)
+  local repo, inside = self:repo_of(rel)
+  if repo then
+    return vim.uv.fs_stat(repo.root .. "/.git") and repo.root or nil, inside
+  end
+  if self.git then
+    return self.root, rel
+  end
+end
+
+-- HEAD of the checkout holding `rel` (cached per checkout), or nil.
+function Index:head_of(rel)
+  local dir = self:git_dir(rel)
+  if not dir then
+    return nil
+  end
+  self.heads = self.heads or {}
+  if self.heads[dir] == nil then
+    local out = git(dir, { "rev-parse", "--verify", "HEAD" })
+    self.heads[dir] = out and vim.trim(out) or false
+  end
+  return self.heads[dir] or nil
+end
+
+-- One identity for the HEADs of all the workspace's repositories: it changes when any does.
+function Index:workspace_head()
+  local lines = {}
+  for _, repo in ipairs(self.workspace and self.workspace.repos or {}) do
+    local head = self:head_of(repo.dir .. "/")
+    if head then
+      lines[#lines + 1] = repo.dir .. "=" .. head
+    end
+  end
+  table.sort(lines)
+  return #lines > 0 and vim.fn.sha256(table.concat(lines, "\n")) or nil
+end
+
 function Index:backend(rel)
   return self.by_ext[extension(rel) or ""]
 end
@@ -398,14 +437,36 @@ function Index:grep(pattern)
     return cached
   end
   local found = {}
-  if self.git then
-    local out = git(self.root, { "grep", "-l", "-z", "--untracked", "-E", pattern })
-    for _, rel in ipairs(split0(out)) do
+  -- git greps each checkout (the project's, or each workspace repository); only files outside
+  -- any checkout are read
+  local unlisted = {}
+  local checkouts = {}
+  if self.workspace then
+    for _, repo in ipairs(self.workspace.repos) do
+      if vim.uv.fs_stat(repo.root .. "/.git") then
+        checkouts[#checkouts + 1] = { root = repo.root, prefix = repo.dir .. "/" }
+      end
+    end
+    for _, rel in ipairs(self.files) do
+      if not self:git_dir(rel) then
+        unlisted[#unlisted + 1] = rel
+      end
+    end
+  elseif self.git then
+    checkouts[1] = { root = self.root, prefix = "" }
+  else
+    unlisted = self.files
+  end
+  for _, checkout in ipairs(checkouts) do
+    local out = git(checkout.root, { "grep", "-l", "-z", "--untracked", "-E", pattern })
+    for _, path in ipairs(split0(out)) do
+      local rel = checkout.prefix .. path
       if self.file_set[rel] then
         found[#found + 1] = rel
       end
     end
-  else
+  end
+  if #unlisted > 0 then
     -- ERE word boundaries alternate between Vim's start-of-word and end-of-word atoms
     local opening = true
     local translated = pattern:gsub("\\b", function()
@@ -414,7 +475,7 @@ function Index:grep(pattern)
       return atom
     end)
     local regex = vim.regex("\\v" .. translated)
-    for _, rel in ipairs(self.files) do
+    for _, rel in ipairs(unlisted) do
       for _, line in ipairs(vim.fn.readfile(self:abs(rel))) do
         if regex:match_str(line) then
           found[#found + 1] = rel
@@ -422,6 +483,9 @@ function Index:grep(pattern)
         end
       end
     end
+  end
+  if self.workspace then
+    table.sort(found)
   end
   self.grep_cache[pattern] = found
   return found

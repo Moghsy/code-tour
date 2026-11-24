@@ -1921,6 +1921,61 @@ function M.explain_with_context(selected)
   return M.explain(selected, true)
 end
 
+-- Rewrite the focused box's explanation from scratch, even when it is still fresh.
+-- Saved tours queue the box through the saved regeneration round trip; AST tours ask
+-- for the box again and the reply is stored as its newest version. Q&A stays attached.
+function M.regenerate(action)
+  local stop, box = current()
+  if not stop or not box then
+    notify("Open a tour before regenerating an explanation")
+    return
+  end
+  if box._saved then
+    if not saved.guard(box._saved) then
+      notify(box._saved.reason or "This saved box cannot be regenerated")
+      return
+    end
+    if box._saved.status == "queued" or box._saved.status == "generating" then
+      notify("This explanation is already being regenerated")
+      return
+    end
+    if not generation(function() M.regenerate(action) end) then return end
+    local ok, id = pcall(saved.retry, s, box._saved.id)
+    if not ok then
+      notify(id)
+      return
+    end
+    render(false)
+    return id
+  end
+  if s.ast and stop.ast and box.anchor and not stop.lazy then
+    local sn, region = s.ast:resolve_anchor(box.anchor)
+    if not sn then
+      notify("This box is not part of the AST tour")
+      return
+    end
+    local ok, why = ast_guard()
+    if not ok then
+      notify(why)
+      return
+    end
+    local id = region and region.id or "overview"
+    local text = table.concat(vim.api.nvim_buf_get_lines(stop.buf, box.start - 1, box["end"], false), "\n")
+    local previous = type(box.note) == "string" and box.note:find("%S") and box.note or nil
+    local context = "Regenerate: write a new explanation of this box from scratch; it replaces the existing one."
+      .. (previous and ("\nExisting explanation to improve on:\n" .. previous) or "")
+    local prompt = require("code-tour.ast.prompts").explain(s.ast, ast_ctx(), {
+      sn = sn, boxes = { id }, context = context, text = text,
+    })
+    started(("Regenerating explanation for %s %s…"):format(sn.n, id))
+    deliver(prompt, action or "stay", function(sent, err)
+      if not sent or err then notify(err) end
+    end)
+    return sn.n, prompt
+  end
+  notify("Only saved and AST tour boxes can be regenerated; explain a selection to add finer parts")
+end
+
 function M.explain_symbol(context, reason, call)
   if not generation(function() M.explain_symbol(context, reason, call) end) then return end
   if context.tour ~= s.id or not locate(context.stop, context.box) then return end
@@ -2532,6 +2587,7 @@ function M.setup(opts)
     ask = M.ask,
     explain = M.explain,
     explain_context = M.explain_with_context,
+    regenerate = function() M.regenerate() end,
     inspect = function() M.expand_call() end,
     back = M.return_to_caller,
     text_view = M.focus,
@@ -2559,6 +2615,7 @@ function M.setup(opts)
     CodeTourRecenter = M.recenter,
     CodeTourExplain = M.explain,
     CodeTourExplainContext = M.explain_with_context,
+    CodeTourRegenerate = function() M.regenerate() end,
     CodeTourDefinition = M.explain_definition,
     CodeTourExpand = function() M.expand_call() end,
     CodeTourReturn = M.return_to_caller,

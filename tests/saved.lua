@@ -221,6 +221,14 @@ local function run()
   check(retried ~= nil and active().entry == last.entry, "Explain current box explicitly retries failed saved target")
   reply(nil, "Retried explanation")
   check(last.entry.status == "ready", "Explicit retry accepts fresh source")
+  -- A ready box can be regenerated on demand, not only a stale one.
+  local regen = tour.regenerate()
+  check(regen ~= nil, "Regenerate queues a ready saved box")
+  check(last.entry.status == "queued" or last.entry.status == "generating", "The regenerating box is no longer ready")
+  while active() and last.entry.status ~= "ready" do
+    reply(nil, "Retried explanation")
+  end
+  check(last.entry.status == "ready", "Regenerated reply is accepted")
   -- Ready notes and Q&A disappear immediately after an edit, including copy/prompt paths.
   last.entry.runtime.thread = { { question = "old Q", answer = "old A" } }
   tour.focus()

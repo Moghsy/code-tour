@@ -13,6 +13,7 @@ M.defaults = {
   ask = "<leader>ar",
   explain = "<leader>ae",
   explain_context = "<leader>aE",
+  regenerate = "<leader>aR",
   inspect = "<leader>ad",
   back = "<leader>ao",
   text_view = "<leader>af",

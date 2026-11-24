@@ -382,6 +382,18 @@ local function editor(root)
   end
   t.eq(r8box.note, "Counts the order.\n\nIncrements processed.", "r8 shows its note")
   t.check(not r8box.writing, "r8 is written")
+
+  -- regenerate asks again for a box whose note is already fresh, and a fill replaces it
+  s.stop, s.box = select(2, find_anchor("n1")), 3
+  tour.render(false)
+  before = #sent
+  local rid, rp = tour.regenerate()
+  t.eq(rid, "n1", "regenerate names the snippet")
+  t.eq(#sent, before + 1, "regenerate sends one request")
+  t.check(rp:find("box r2", 1, true) and rp:find("Regenerate: write a new explanation", 1, true), "it asks for r2 again: " .. rp)
+  ok, err = pcall(tour.fill, "n1", "## r2\nA fresh rewrite.\n\nNew body.")
+  t.check(ok, "the regenerated note is accepted: " .. tostring(err))
+  t.eq(require("code-tour.stops").boxes(find_anchor("n1"))[3].note, "A fresh rewrite.\n\nNew body.", "r2 shows the rewrite")
 end
 
 t.finish("ast_expand", function()

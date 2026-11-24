@@ -146,18 +146,22 @@ local function footer_hint(width, branch, nested)
   end
 end
 
--- One entry per turn, so a page never mixes two questions.
+-- One entry per turn, so a page never mixes two questions. The question is a quoted
+-- block, the answer follows plainly, and an unanswered turn carries a status line.
 local function thread_turns(box)
   local turns = {}
   if box._saved and box._saved.status ~= "ready" then return turns end
   for _, turn in ipairs(box.thread) do
-    local lines = { "**Q:** " .. turn.question }
+    local quoted = {}
+    for line in (turn.question .. "\n"):gmatch("(.-)\n") do quoted[#quoted + 1] = "> " .. line end
+    quoted[1] = "> **Q ›** " .. quoted[1]:sub(3)
+    local lines = { table.concat(quoted, "\n") }
     if turn.answer then
-      -- Block-level answers (headings, lists, code) start below the label.
-      local block = turn.answer:match("^%s*[#>|`~]") or turn.answer:match("^%s*[-*+] ") or turn.answer:match("^%s*%d+[.)] ")
-      lines[#lines + 1] = (block and "**A:**\n" or "**A:** ") .. turn.answer
+      lines[#lines + 1] = turn.answer
+    elseif turn.error then
+      lines[#lines + 1] = "**✗ Delivery failed:** " .. turn.error
     else
-      lines[#lines + 1] = turn.error and ("*Delivery:* " .. turn.error) or "*Waiting for answer…*"
+      lines[#lines + 1] = "*⏳ Waiting for answer…*"
     end
     turns[#turns + 1] = table.concat(lines, "\n\n")
   end
@@ -168,14 +172,17 @@ local function thread_lines(box)
   return thread_turns(box)
 end
 
--- Pages for the whole thread: each turn is paginated on its own. Returns pages, first page of each turn.
+-- Pages for the whole thread: each turn is paginated on its own. Returns pages, the first
+-- page of each turn, and the turn each page belongs to.
 local function thread_pages(box, width, height)
-  local pages, firsts = {}, {}
-  for _, text in ipairs(thread_turns(box)) do
+  local pages, firsts, owner = {}, {}, {}
+  for turn, text in ipairs(thread_turns(box)) do
     firsts[#firsts + 1] = #pages + 1
-    vim.list_extend(pages, markdown.pages(text, width, height))
+    local made = markdown.pages(text, width, height)
+    for _ = 1, #made do owner[#pages + _] = turn end
+    vim.list_extend(pages, made)
   end
-  return pages, firsts
+  return pages, firsts, owner
 end
 
 function M.build(state, stop, box)
@@ -203,14 +210,15 @@ function M.build(state, stop, box)
   local notes = markdown.pages(note, width - 4, note_capacity)
   state.note_page = math.max(1, math.min(state.note_page or 1, #notes))
   local thread = thread_lines(box)
-  local qa, firsts
+  local qa, firsts, owner
   if has_qa then
-    qa, firsts = thread_pages(box, width - 4, math.max(1, budget - #notes[state.note_page]))
+    qa, firsts, owner = thread_pages(box, width - 4, math.max(1, budget - #notes[state.note_page]))
   end
   -- "latest" lands on the newest question, so a fresh answer is never hidden behind older ones.
   if state.page == "latest" then state.page = firsts and firsts[#firsts] or 1 end
   state.page = qa and math.max(1, math.min(state.page or 1, #qa)) or 1
   state.note_pages, state.qa_pages = #notes, qa and #qa or 1
+  state.qa_firsts, state.qa_owner = firsts, owner
   local rows = { { { "", "Normal" } } }
   local name = (stop.title or "Snippet"):gsub("^%s*%d+[.)]%s+", "", 1)
   local snippet, total = stops.snippet_position(state.stops, stop)
@@ -248,7 +256,13 @@ function M.build(state, stop, box)
   if name_width > 0 then title = counter .. " · " .. model.wrap(name, name_width)[1] .. page end
   frame(rows, notes[state.note_page], title, width, indent, not qa and hints or nil)
   if qa then
-    local qa_title = #qa > 1 and ("Q&A · Page %d/%d"):format(state.page, #qa) or "Q&A"
+    local qa_title = "Q&A"
+    local turn = owner[state.page]
+    if #firsts > 1 then qa_title = qa_title .. (" · Question %d/%d"):format(turn, #firsts) end
+    local last_page = (firsts[turn + 1] or (#qa + 1)) - 1
+    if last_page > firsts[turn] then
+      qa_title = qa_title .. (" · Page %d/%d"):format(state.page - firsts[turn] + 1, last_page - firsts[turn] + 1)
+    end
     frame(rows, qa[state.page], qa_title, width, indent, hints)
   end
   rows[#rows + 1] = { { "", "Normal" } }

@@ -569,6 +569,14 @@ function M.page(delta)
   end
   render(false)
 end
+-- Jump to the first page of the previous/next question of the focused box's thread.
+function M.question(delta)
+  local firsts, owner = s.qa_firsts, s.qa_owner
+  if not firsts or #firsts < 2 then return end
+  local turn = math.max(1, math.min(#firsts, (owner[s.page] or #firsts) + delta))
+  s.page = firsts[turn]
+  render(false)
+end
 function M.focus()
   render(false)
   view.focus()
@@ -2597,6 +2605,8 @@ function M.setup(opts)
     zoom_in = function() M.zoom(1) end,
     page_next = function() M.page(1) end,
     page_prev = function() M.page(-1) end,
+    question_next = function() M.question(1) end,
+    question_prev = function() M.question(-1) end,
     visual = {
       ask = function()
         local a, b = vim.fn.line("v"), vim.fn.line(".")

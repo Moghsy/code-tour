@@ -65,6 +65,19 @@ local function test()
   until shown:find("second question?", 1, true) or guard > 20
   check(shown:find("second answer", 1, true) and not shown:find("third question?", 1, true) and not shown:find("long answer", 1, true), "pages never mix turns")
 
+  -- question-aware navigation: titles name the question, and a[/a] style jumps skip long answers
+  tour.question(1)
+  shown = text()
+  check(shown:find("Question 3/3", 1, true) and shown:find("Page 1/", 1, true), "title names the question and its page")
+  tour.question(-1)
+  shown = text()
+  check(shown:find("Question 2/3", 1, true) and shown:find("second question?", 1, true), "question_prev lands on the previous question")
+  tour.question(1)
+  check(text():find("third question?", 1, true), "question_next returns to the next question")
+  tour.question(1)
+  check(text():find("Question 3/3", 1, true), "question_next stops at the newest question")
+  check(text():find("▎", 1, true), "the question is drawn as a quoted block")
+
   -- box above line 1 keeps its rows after the thread grows
   tour.render(true)
   local layout = view.state()

@@ -53,6 +53,7 @@ bin/code-tour src/main.lua:10-18
 | `<leader>ar` | Ask about the box or selection |
 | `<leader>ae` / `aE` | Explain selection (with extra context) |
 | `<leader>aR` | Regenerate the box's explanation (saved and AST tours) |
+| `<leader>a{` / `a}` | Previous / next question in the Q&A thread |
 | `<leader>af` | Text-only view of the explanation |
 | `<leader>ah` | Show / hide boxes |
 | `<leader>aq` | Quit the tour |

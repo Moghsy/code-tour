@@ -23,6 +23,8 @@ M.defaults = {
   zoom_in = "<leader>a+",
   page_next = "<leader>a]",
   page_prev = "<leader>a[",
+  question_next = "<leader>a}",
+  question_prev = "<leader>a{",
 }
 
 -- Which actions also work on a visual selection.

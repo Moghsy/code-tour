@@ -47,9 +47,18 @@ project index is a *workspace index*:
   directory first, so a nested repository wins). Everything downstream keeps using keys
   relative to the root, so addresses, regions, routes and the persisted graph are unchanged.
 - Blob identity is the repository's own blob SHA; a file modified in the working tree is
-  hashed from content, exactly as in a single repository.
-- The notes store is `<root>/.code-tour` (the root has no git common directory).
-  Note versions carry no commit, since no one commit describes the workspace.
+  hashed with that repository's `git hash-object`, exactly as in a single repository.
+- `idx:grep` runs `git grep` in each repository that has a `.git`; only files under no checkout
+  are read in Lua.
+- Git is consulted per checkout (`idx:git_dir(rel)`, `idx:head_of(rel)`): clean-file baselines
+  come from each repository's `git status`; a file is clean when its blob equals the blob at
+  *its* repository's HEAD; a note records the commit of the repository holding its file; and
+  TTL pruning compares a note's symbol with the file at that repository's HEAD.
+- The store's HEAD (`store.head`, the freshness shortcut's identity) is
+  `idx:workspace_head()`: a digest of every repository's HEAD, so a commit anywhere makes
+  the committed-state shortcut fall back to blob comparison, never to re-fingerprinting.
+- The notes store is `<root>/.code-tour` (the root has no git common directory), or the main
+  copy's in a worktree.
 
 ## 3. Saved tours that relocate
 
@@ -85,15 +94,19 @@ same layout as the main copy. With `main(root)` returning the main copy:
   overrule it.
 - A `main` that returns the root itself, or a missing directory, means "not a worktree".
 
-## 6. Not covered
+## 6. The headless CLI
 
-The headless CLI (`bin/code-tour`) runs without `setup`, so it never sees these hooks; a
-workspace needs the editor to be configured. Authored tours need nothing: they already take any
-file under their root.
+`bin/code-tour` runs headless Neovim without `setup`. Set `CODE_TOUR_CONFIG` to a Lua file
+returning `{ ast = {...}, workspace = {...} }` (the tables `setup` takes) and the CLI loads
+them before any command; an unreadable file is a JSON error. When it is set, the wrapper no
+longer replaces the working directory with its git top level, so the `root` hook can find the
+workspace from anywhere inside it. With `--pane`, the running editor's own setup applies.
+Unset, nothing is loaded and nothing changes. Authored tours need nothing: they already take
+any file under their root.
 
 ## 7. Tests
 
 `tests/workspace.lua`: unconfigured behaviour is unchanged and hooks are validated; spanning
-index (listing, ignore rules, abs/rel, blobs, root hook, failing hooks); worktree index and
+index (listing, ignore rules, abs/rel, blobs, root hook, failing hooks); git grep, per-repository HEADs, clean baselines, note commits and TTL pruning; the CLI with and without `CODE_TOUR_CONFIG`; worktree index and
 shared store; review with and without the hook; saved relocation, explicit overrides,
 worktree preference, canonical recording and fallback after the worktree is removed.

@@ -161,6 +161,68 @@ local function worktrees()
   workspace.setup(nil)
 end
 
+-- freshness, commits, pruning and grep use each repository's git, not a root that has none
+local function stores()
+  workspace.setup({ repos = all_repos })
+  local idx = index(base)
+  eq(idx:grep("class B"), { "web/src/B.java" }, "grep finds files through each repository's git grep")
+  write(web .. "/src/Untracked.java", { "class B2 {}" })
+  eq(index(base):grep("class B"), { "web/src/B.java", "web/src/Untracked.java" }, "git grep includes untracked files")
+  vim.fn.delete(web .. "/src/Untracked.java")
+  eq(idx:grep("ignored|Skip"), {}, "and honours the repository's ignore rules")
+  local head = vim.trim(git(api, "rev-parse", "HEAD"))
+  eq({ idx:head_of("api/src/A.java"), idx:head_of("web/src/B.java") ~= head, idx:head_of("notes/Loose.java") },
+    { head, true, nil }, "each file has its own repository's HEAD")
+  local before = idx:workspace_head()
+  check(before ~= nil, "the workspace has a combined HEAD")
+  write(api .. "/extra.txt", { "x" })
+  git(api, "add", "-A")
+  git(api, "commit", "-qm", "more")
+  check(index(base):workspace_head() ~= before, "a commit in any repository changes it")
+  if not require("code-tour.ast.index").parser_available("java") then
+    print("MISSING PARSER: java (store checks skipped)")
+    return
+  end
+  local fresh = index(base)
+  local store = require("code-tour.ast.store").new(fresh, vim.tbl_extend("force", ast.options, { store_ttl_days = -1 }))
+  eq(store.head, fresh:workspace_head(), "the store's HEAD is the combined one")
+  eq(vim.tbl_count(store.baselines), 3, "clean files are known per repository, so they are not re-hashed")
+  store:put("java:A#run()", { file = "api/src/A.java", symbol = "java:A#run()", detail = "normal",
+    fingerprint = "x", gist = "Runs.", body = "Body." })
+  local doc = vim.json.decode(table.concat(vim.fn.readfile(store:file_path("api/src/A.java")), "\n"))
+  eq(doc.notes["java:A#run()"][1].bodies.normal.commit, vim.trim(git(api, "rev-parse", "HEAD")),
+    "a note records the commit of its repository")
+  local state = store:file_state("api/src/A.java")
+  check(state.clean, "an unmodified file is clean against its repository's HEAD")
+  store:put("java:A#gone()", { file = "api/src/A.java", symbol = "java:A#gone()", detail = "normal",
+    fingerprint = "y", gist = "Gone." })
+  eq(store:prune().removed, 1, "ttl pruning checks symbols against the repository's HEAD")
+  workspace.setup(nil)
+end
+
+-- the headless CLI loads the hooks from CODE_TOUR_CONFIG
+local function cli()
+  if not require("code-tour.ast.index").parser_available("java") then
+    return
+  end
+  local config = sandbox .. "/config.lua"
+  vim.fn.writefile({ "return { workspace = { repos = function(root)",
+    "  return { root .. '/api', root .. '/web', root .. '/tools' } end } }" }, config)
+  local script = plugin .. "/lua/code-tour/ast/headless.lua"
+  local function codegraph(env)
+    local result = vim.system({ "nvim", "--headless", "-u", "NONE", "-i", "NONE", "-l", script, "codegraph",
+      "--root", base }, { text = true, env = vim.tbl_extend("force", {
+        CODE_TOUR_PARSER_RUNTIME = vim.fn.expand("~/.local/share/nvim/site"),
+        XDG_CACHE_HOME = sandbox .. "/cli-cache", XDG_STATE_HOME = sandbox .. "/cli-state" }, env) }):wait()
+    assert(vim.trim(result.stdout) ~= "", result.stderr)
+    local line = vim.split(vim.trim(result.stdout), "\n")
+    return vim.json.decode(line[#line])
+  end
+  eq(codegraph({ CODE_TOUR_CONFIG = config }).files, 3, "the CLI spans the repositories when configured")
+  check(codegraph({}).files ~= 3, "and walks the directory, as before, when it is not")
+  check(codegraph({ CODE_TOUR_CONFIG = sandbox .. "/missing.lua" }).error, "an unreadable config is an error")
+end
+
 local function review()
   local review_mod = require("code-tour.review")
   write(web .. "/src/B.java", { "class B {", "  void go() { more(); }", "}" })
@@ -247,6 +309,8 @@ local ok, err = xpcall(function()
   unset()
   spanning()
   worktrees()
+  stores()
+  cli()
   review()
   saved()
 end, debug.traceback)

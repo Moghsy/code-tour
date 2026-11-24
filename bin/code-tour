@@ -607,7 +607,7 @@ def analyze_main(argv):
     if args.view == 'neighbors' and not args.symbol:
         parser.error('neighbors needs a symbol')
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
@@ -643,7 +643,7 @@ def concept_main(argv):
         command_parser.add_argument('--agent-session')
     args = parser.parse_args(argv)
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
@@ -688,7 +688,7 @@ def ast_main(argv):
     if not args.entries and not args.auto and not args.stale and not any(item['kind'] == 'add' for item in args.overrides or []):
         parser.error('pass an entry symbol, --stale or --auto')
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
@@ -831,7 +831,7 @@ def brief_main(argv):
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
@@ -934,7 +934,7 @@ def knowledge_main(command, argv):
     if args.budget is not None and args.budget < 1:
         parser.error('--budget must be positive')
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
@@ -982,7 +982,7 @@ def store_main(argv):
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0: root = Path(git.stdout.strip()).resolve()
     if args.pane:
@@ -1005,7 +1005,7 @@ def scenario_main(argv):
     parser.add_argument('--agent-session')
     args = parser.parse_args(argv)
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0: root = Path(git.stdout.strip()).resolve()
     target = choose(instances(), args.pane, session_key(args), root, [])
@@ -1021,7 +1021,7 @@ def agent_main(argv):
     parser.add_argument('--project', type=Path)
     args = parser.parse_args(argv)
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0: root = Path(git.stdout.strip()).resolve()
     begin, end = '<!-- code-tour:section:start -->', '<!-- code-tour:section:end -->'
@@ -1136,7 +1136,7 @@ def main(argv=None):
         return 0
     data = None if args.answer is not None else read_stops(args)
     root = (args.project or Path.cwd()).resolve()
-    if not args.project:
+    if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()

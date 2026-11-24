@@ -14,6 +14,23 @@ if vim.env.CODE_TOUR_AST_LANGUAGES then
   require("code-tour.ast").setup({ languages = languages })
 end
 
+-- CODE_TOUR_CONFIG: a Lua file returning { ast = {...}, workspace = {...} }, the same tables as
+-- setup() takes, so the CLI sees the workspace hooks (SPEC-workspace.md §6). Unset, nothing loads.
+if vim.env.CODE_TOUR_CONFIG and vim.env.CODE_TOUR_CONFIG ~= "" then
+  local loaded, err = pcall(function()
+    local config = assert(loadfile(vim.fn.expand(vim.env.CODE_TOUR_CONFIG)))()
+    assert(type(config) == "table", "CODE_TOUR_CONFIG must return a table")
+    if config.ast then
+      require("code-tour.ast").setup(config.ast)
+    end
+    require("code-tour.workspace").setup(config.workspace)
+  end)
+  if not loaded then
+    io.stdout:write(vim.json.encode({ error = "CODE_TOUR_CONFIG: " .. tostring(err) }), "\n")
+    vim.cmd("cquit 1")
+  end
+end
+
 local function parse(argv)
   local cmd, opts = argv[1], {}
   local i = 2

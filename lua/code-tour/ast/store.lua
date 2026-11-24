@@ -109,7 +109,8 @@ end
 local function location(idx, options)
   local common = idx.git and git(idx.root, "rev-parse", "--path-format=absolute", "--git-common-dir")
   local main = common and vim.fs.dirname(vim.trim(common)) or idx.store_root or idx.root
-  local head = idx.git and git(idx.root, "rev-parse", "--verify", "HEAD")
+  -- a workspace has no HEAD of its own: its identity is that of its repositories' HEADs
+  local head = idx.workspace and idx:workspace_head() or (idx.git and git(idx.root, "rev-parse", "--verify", "HEAD"))
   if options.store == "user" then
     local commits = head and git(idx.root, "rev-list", "--max-parents=0", "HEAD")
     local first = commits and vim.split(vim.trim(commits), "\n", { plain = true }) or {}
@@ -156,18 +157,32 @@ end
 
 local function clean_files(idx)
   local files = {}
-  if idx.git then
-    local raw = git(idx.root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
+  -- the project's checkout, or each workspace repository; `prefix` places its paths in the index
+  local checkouts = {}
+  if idx.workspace then
+    for _, repo in ipairs(idx.workspace.repos) do
+      if idx:git_dir(repo.dir .. "/") then
+        checkouts[#checkouts + 1] = { root = repo.root, prefix = repo.dir .. "/" }
+      end
+    end
+  elseif idx.git then
+    checkouts[1] = { root = idx.root, prefix = "" }
+  end
+  local dirty = {}
+  local listed = {}
+  for _, checkout in ipairs(checkouts) do
+    local raw = git(checkout.root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
     if raw then
-      local dirty = {}
+      listed[checkout.prefix] = true
       for entry in raw:gmatch("[^%z]+") do
-        dirty[entry:sub(4)] = true
+        dirty[checkout.prefix .. entry:sub(4)] = true
       end
-      for _, file in ipairs(idx.files) do
-        if idx.blobs[file] and not dirty[file] then
-          files[file] = stamp(uv.fs_stat(idx:abs(file)))
-        end
-      end
+    end
+  end
+  for _, file in ipairs(idx.files) do
+    local repo = idx:repo_of(file)
+    if (listed[repo and repo.dir .. "/" or ""]) and idx.blobs[file] and not dirty[file] then
+      files[file] = stamp(uv.fs_stat(idx:abs(file)))
     end
   end
   return files
@@ -248,9 +263,11 @@ function Store:file_state(file)
   elseif self.baselines[file] == signature then
     blob, clean = self.idx.blobs[file], true
   else
-    local value = self.idx.git and git(self.idx.root, "hash-object", "--", file)
+    local checkout, inside = self.idx:git_dir(file)
+    local value = checkout and git(checkout, "hash-object", "--", inside)
     blob = value and vim.trim(value) or vim.fn.sha256(table.concat(vim.fn.readfile(path, "b"), "\n"))
-    local head_blob = self.head and git(self.idx.root, "rev-parse", "--verify", self.head .. ":" .. file)
+    local head = self.idx:head_of(file)
+    local head_blob = head and git(checkout, "rev-parse", "--verify", head .. ":" .. inside)
     clean = head_blob and vim.trim(head_blob) == blob or false
   end
   local state = { signature = signature, blob = blob, clean = clean, modified = modified, buf = modified and buf or nil }
@@ -631,8 +648,9 @@ function Store:update_note(address, note, update)
 end
 
 function Store:put(address, note)
-  local commit = self.idx.git and git(self.idx.root, "rev-parse", "--verify", "HEAD")
-  note.commit = commit and vim.trim(commit)
+  -- the commit of the repository holding the note's file
+  local file = note.file or (note.symbol and self:symbol_file(note.symbol))
+  note.commit = file and self.idx:head_of(file) or nil
   return self:update_note(address, note, function(cur)
     notes.write_version(cur, note)
   end)
@@ -737,14 +755,16 @@ end
 
 local function head_facts(store, file)
   local backend = store.idx:backend(file)
-  if not store.head or not backend or not parser_available(backend.parser) then
+  local checkout, inside = store.idx:git_dir(file)
+  local head = store.idx:head_of(file)
+  if not head or not backend or not parser_available(backend.parser) then
     return false
   end
-  local tree = git(store.idx.root, "ls-tree", "-z", store.head, "--", file)
+  local tree = git(checkout, "ls-tree", "-z", head, "--", inside)
   if tree == "" then
     return { symbols = {}, bodies = {} }
   end
-  local raw = tree and git(store.idx.root, "show", store.head .. ":" .. file)
+  local raw = tree and git(checkout, "show", head .. ":" .. inside)
   local facts = raw and backend.extract(file, raw)
   return facts and not facts.error and facts or false
 end

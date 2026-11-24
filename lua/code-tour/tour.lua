@@ -1586,6 +1586,9 @@ function M.open_saved(id, opts)
   opts = opts or {}
   library.check_directory(opts.library)
   local record, revision = library.read(id)
+  -- workspace hooks (opt-in) may relocate repositories; explicit overrides stay in charge
+  opts = vim.tbl_extend("force", opts,
+    { repositories = require("code-tour.workspace").saved_roots(record, opts.root or s.root or vim.fn.getcwd(), opts.repositories) })
   -- Preflight all mappings before touching the active tour or its queue.
   local plan = saved.prepare(record, vim.tbl_extend("force", opts,
     { reuse_unverified = not s.opts or s.opts.saved_reuse_unverified ~= false }))
@@ -2579,6 +2582,7 @@ function M.setup(opts)
   end
   assert(type(s.opts.saved_reuse_unverified) == "boolean", "saved_reuse_unverified must be a boolean")
   require("code-tour.ast").setup(s.opts.ast)
+  require("code-tour.workspace").setup(s.opts.workspace)
   require("code-tour.instance").register()
   highlights()
   badge.configure(s.opts.badge)

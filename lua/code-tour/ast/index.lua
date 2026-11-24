@@ -61,11 +61,21 @@ end
 -- opts: { root?, languages?, ignore = {patterns}, cache_dir?, max_files? }
 function M.new(opts)
   opts = opts or {}
-  local root, is_git = M.root(opts.root)
+  -- a workspace (several repositories under a root that is none) is opt-in: workspace.lua
+  local workspace = opts.workspace or require("code-tour.workspace").resolve(opts.root or vim.fn.getcwd())
+  local root, is_git
+  if workspace then
+    root, is_git = workspace.root, false
+  else
+    root, is_git = M.root(opts.root)
+  end
   local list, by_ext = backends(opts.languages)
   local self = setmetatable({
     root = root,
     git = is_git,
+    workspace = workspace,
+    -- the notes store lives with the main copy when the root is a worktree of the project
+    store_root = workspace and (workspace.main or workspace.root) or nil,
     backends = list,
     by_ext = by_ext,
     ignore = opts.ignore or {},
@@ -92,48 +102,82 @@ function Index:ignored(rel)
 end
 
 -- Files: exactly what git lists (tracked plus untracked, not ignored), minus ast.ignore.
+local function walk_files(dir, rel, out)
+  for name, kind in vim.fs.dir(dir) do
+    local r = rel and (rel .. "/" .. name) or name
+    if kind == "directory" then
+      if not fallback_skip[name] then
+        walk_files(dir .. "/" .. name, r, out)
+      end
+    elseif kind == "file" then
+      out[#out + 1] = r
+    end
+  end
+end
+
+-- The files of one git checkout at `dir`: candidates (tracked plus untracked, not ignored) and
+-- the blob SHA of each file git can vouch for. `prefix` places them under the project root.
+local function git_files(dir, prefix, candidates, blobs)
+  local function place(path)
+    return prefix and (prefix .. "/" .. path) or path
+  end
+  for _, path in ipairs(split0(git(dir, { "ls-files", "-z", "--cached", "--others", "--exclude-standard" }))) do
+    candidates[#candidates + 1] = place(path)
+  end
+  for _, line in ipairs(split0(git(dir, { "ls-files", "-s", "-z" }))) do
+    local sha, path = line:match("^%d+ (%x+) %d+\t(.*)$")
+    if sha then
+      blobs[place(path)] = sha
+    end
+  end
+  -- the index SHA is wrong for files modified in the working tree, and git does not
+  -- report modifications of assume-unchanged (lowercase tag) or skip-worktree (S) files
+  for _, path in ipairs(split0(git(dir, { "ls-files", "-m", "-z" }))) do
+    blobs[place(path)] = nil
+  end
+  for _, line in ipairs(split0(git(dir, { "ls-files", "-v", "-z" }))) do
+    local tag, path = line:match("^(%S) (.*)$")
+    if tag and (tag:match("%l") or tag == "S") then
+      blobs[place(path)] = nil
+    end
+  end
+end
+
+-- Files: exactly what git lists (tracked plus untracked, not ignored), minus ast.ignore.
+-- In a workspace, each repository is listed under its directory in the project root.
 function Index:list_files()
   self.files, self.file_set, self.blobs = {}, {}, {}
   self.modules = {}
   local candidates = {}
-  if self.git then
-    candidates = split0(git(self.root, { "ls-files", "-z", "--cached", "--others", "--exclude-standard" }))
-    for _, line in ipairs(split0(git(self.root, { "ls-files", "-s", "-z" }))) do
-      local sha, path = line:match("^%d+ (%x+) %d+\t(.*)$")
-      if sha then
-        self.blobs[path] = sha
-      end
+  if self.workspace then
+    self.repo_list = {}
+    for _, repo in ipairs(self.workspace.repos) do
+      self.repo_list[#self.repo_list + 1] = repo
     end
-    -- the index SHA is wrong for files modified in the working tree, and git does not
-    -- report modifications of assume-unchanged (lowercase tag) or skip-worktree (S) files
-    for _, path in ipairs(split0(git(self.root, { "ls-files", "-m", "-z" }))) do
-      self.blobs[path] = nil
-    end
-    for _, line in ipairs(split0(git(self.root, { "ls-files", "-v", "-z" }))) do
-      local tag, path = line:match("^(%S) (.*)$")
-      if tag and (tag:match("%l") or tag == "S") then
-        self.blobs[path] = nil
-      end
-    end
-  else
-    local function walk(dir, rel)
-      for name, kind in vim.fs.dir(dir) do
-        local r = rel and (rel .. "/" .. name) or name
-        if kind == "directory" then
-          if not fallback_skip[name] then
-            walk(dir .. "/" .. name, r)
-          end
-        elseif kind == "file" then
-          candidates[#candidates + 1] = r
+    -- the longest directory first, so a nested repository wins over the one around it
+    table.sort(self.repo_list, function(a, b)
+      return #a.dir > #b.dir
+    end)
+    for _, repo in ipairs(self.workspace.repos) do
+      if vim.uv.fs_stat(repo.root .. "/.git") then
+        git_files(repo.root, repo.dir, candidates, self.blobs)
+      else
+        local found = {}
+        walk_files(repo.root, nil, found)
+        for _, path in ipairs(found) do
+          candidates[#candidates + 1] = repo.dir .. "/" .. path
         end
       end
     end
-    walk(self.root, nil)
+  elseif self.git then
+    git_files(self.root, nil, candidates, self.blobs)
+  else
+    walk_files(self.root, nil, candidates)
   end
   local seen = {}
   for _, rel in ipairs(candidates) do
     if not seen[rel] and self.by_ext[extension(rel) or ""] and not self:ignored(rel)
-        and vim.uv.fs_stat(self.root .. "/" .. rel) then
+        and vim.uv.fs_stat(self:abs(rel)) then
       seen[rel] = true
       self.files[#self.files + 1] = rel
       self.file_set[rel] = true
@@ -150,12 +194,27 @@ function Index:list_files()
   end
 end
 
+-- The workspace repository holding `rel` and the path inside it.
+function Index:repo_of(rel)
+  for _, repo in ipairs(self.repo_list or {}) do
+    if rel:sub(1, #repo.dir + 1) == repo.dir .. "/" then
+      return repo, rel:sub(#repo.dir + 2)
+    end
+  end
+end
+
 function Index:abs(rel)
-  return self.root .. "/" .. rel
+  local repo, inside = self:repo_of(rel)
+  return (repo and repo.root or self.root) .. "/" .. (repo and inside or rel)
 end
 
 function Index:rel(path)
   path = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  for _, repo in ipairs(self.repo_list or {}) do
+    if path:sub(1, #repo.root + 1) == repo.root .. "/" then
+      return repo.dir .. "/" .. path:sub(#repo.root + 2)
+    end
+  end
   if path:sub(1, #self.root + 1) == self.root .. "/" then
     return path:sub(#self.root + 2)
   end
@@ -177,7 +236,11 @@ end
 function Index:blob(rel)
   local sha = self.blobs[rel]
   if not sha then
-    if self.git then
+    local repo, inside = self:repo_of(rel)
+    if repo and vim.uv.fs_stat(repo.root .. "/.git") then
+      local out = git(repo.root, { "hash-object", "--", inside })
+      sha = out and vim.trim(out)
+    elseif self.git then
       local out = git(self.root, { "hash-object", "--", rel })
       sha = out and vim.trim(out)
     end

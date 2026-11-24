@@ -108,7 +108,7 @@ end
 
 local function location(idx, options)
   local common = idx.git and git(idx.root, "rev-parse", "--path-format=absolute", "--git-common-dir")
-  local main = common and vim.fs.dirname(vim.trim(common)) or idx.root
+  local main = common and vim.fs.dirname(vim.trim(common)) or idx.store_root or idx.root
   local head = idx.git and git(idx.root, "rev-parse", "--verify", "HEAD")
   if options.store == "user" then
     local commits = head and git(idx.root, "rev-list", "--max-parents=0", "HEAD")

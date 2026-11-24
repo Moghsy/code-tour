@@ -88,6 +88,10 @@ code-tour ast --auto
 
 In Neovim, run `:CodeTourAst` at the cursor, `:CodeTourDetail detailed` to change detail, or `:CodeTourHistory` to reopen a recent tour. Fills automatically persist in the repository's `.code-tour/` store and are reused when the source and walked callees still match. Set `ast.store = "user"` in setup to store them under Neovim's data directory. `code-tour store --prune` prunes the current repository's store.
 
+### Projects of several repositories, and their worktrees
+
+For several git repositories under one directory that is not itself a repository, opt in with `workspace` hooks in setup; nothing changes while they are unset. `repos(root)` makes AST tours span the repositories it returns, `repo(path, root)` (for example `require("code-tour.workspace").git_root`) makes review work from that root, `relocate(repo, ctx)` says where a saved tour's repository lives now, and `main(root)` marks a root as a worktree of a main copy: the worktree stays the tour root, uses its own repositories and falls back to the main copy's for the rest, shares the main copy's `.code-tour` notes, and saved tours prefer its copy of each repository. See `SPEC-workspace.md`.
+
 An agent can inspect the current code with `code-tour explain`, `flow`, `callers`, `impact`, `path`, or `search`. Use `code-tour brief N --tour T` for the code, interfaces, and fill command for one live snippet, and `code-tour --fill N --tour T --model M` to record the model that wrote it.
 
 ### How an AST tour is made

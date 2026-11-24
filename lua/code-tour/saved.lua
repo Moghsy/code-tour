@@ -179,6 +179,7 @@ function M.export(state, opts)
       saved_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     }
   local omitted, prepared = {}, 0
+  local workspace = require("code-tour.workspace")
   local function repo_for(path)
     for _, repo in ipairs(record.repositories) do
       if vim.fs.relpath(repo.root, path) then
@@ -308,6 +309,13 @@ function M.export(state, opts)
     end
   end
   assert(prepared > 0 or #record.stops > 0, "No prepared explanations to save")
+  -- in a worktree of a workspace, repositories are recorded under the main copy
+  local context = workspace.context(state.root or vim.fn.getcwd())
+  if context and context.main then
+    for _, repo in ipairs(record.repositories) do
+      repo.root = workspace.canonical(context, repo.root)
+    end
+  end
   record.title = opts.title or (record.stops[1] and record.stops[1].title) or "Code tour"
   return library.validate(record), omitted
 end

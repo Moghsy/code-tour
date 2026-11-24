@@ -4,9 +4,13 @@ function M.prepare(stop, root, base)
   local old, offset = stop.old, stop.start - 1
   local explicit = old ~= nil
   if old == nil then
-    local gitroot = vim.system({ "git", "rev-parse", "--show-toplevel" }, { cwd = root, text = true }):wait()
-    assert(gitroot.code == 0, "Review requires a Git repository or explicit old text")
-    gitroot = vim.trim(gitroot.stdout)
+    -- the workspace.repo hook names the repository of a file when the tour root is not one
+    local gitroot = require("code-tour.workspace").repo_of(stop.path, root)
+    if not gitroot then
+      local top = vim.system({ "git", "rev-parse", "--show-toplevel" }, { cwd = root, text = true }):wait()
+      assert(top.code == 0, "Review requires a Git repository or explicit old text")
+      gitroot = vim.trim(top.stdout)
+    end
     local path = assert(vim.fs.relpath(gitroot, stop.path), "Review file is outside Git repository")
     local result = vim.system({ "git", "show", (base or "HEAD") .. ":" .. path }, { cwd = gitroot, text = true }):wait()
     if result.code ~= 0 then

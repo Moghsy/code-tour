@@ -776,6 +776,8 @@ The agent should invent as little as possible: the project's tests and its runni
 
 Finding tests resolves every test in the index, so the editor never does it while a request waits: the tour is shown first, the catalog is built in the background in slices of about 10 ms, and the test examples join the tour when it is ready. Queries that need the answer (`explain`, `impact`) build it synchronously.
 
+A tour requested by the CLI or `:CodeTourAst` is built in slices too, so the editor stays usable until it is shown; the CLI polls for it, cancels it when it gives up, and an unpolled build is dropped. The finished tour waits until the reader is not typing; it is built again if its sources changed meanwhile, and dropped if the open tour is closed or changed, or a newer build replaces it. Resolving one file is never split, so other work on a shared index only ever sees whole files. Type names a file mentions are searched together, in one `git grep`.
+
 An editor reuses a project's index, with its parsed facts, resolution and test catalog, while the files, unsaved buffers, path aliases and configuration it was built from are unchanged. Every CLI request that may run long carries a deadline slightly shorter than the CLI's own timeout; past it the editor stops, drops what was half resolved and reports the overrun. A tour that is already being shown is finished.
 
 ## 13. Using the store while coding

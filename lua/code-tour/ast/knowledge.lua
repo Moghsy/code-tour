@@ -5,8 +5,10 @@ local route = require("code-tour.ast.route")
 
 local M = {}
 
-local function resolve(idx, spec)
-  local ids, err = route.new(idx):resolve_entry(spec)
+local function resolve(idx, spec, cwd)
+  local rt = route.new(idx)
+  rt.cwd = cwd
+  local ids, err = rt:resolve_entry(spec)
   if not ids then
     error(err, 0)
   end
@@ -340,8 +342,7 @@ function M.run(action, opts)
   elseif action == "note" then
     return note(opts)
   end
-  local idx = ast.index({ root = opts.root })
-  idx.cwd = opts.cwd
+  local idx = ast.cached_index({ root = opts.root }, "query")
   if action == "prune" then
     return require("code-tour.ast.store").new(idx, ast.options):prune()
   end
@@ -350,14 +351,14 @@ function M.run(action, opts)
     result.root, result.truncated = idx.root, idx.truncated
     return result
   end
-  local symbols = resolve(idx, opts.symbol)
+  local symbols = resolve(idx, opts.symbol, opts.cwd)
   local result
   if action == "callers" then
     result = { callers = callers(call_graph(idx), symbols, 1) }
   elseif action == "impact" then
     result = impact(idx, symbols)
   elseif action == "path" then
-    result = paths(idx, symbols, resolve(idx, opts.target))
+    result = paths(idx, symbols, resolve(idx, opts.target, opts.cwd))
   else
     error("unknown knowledge command " .. tostring(action), 0)
   end

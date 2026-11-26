@@ -691,6 +691,32 @@ def concept_main(argv):
     return 0
 
 
+def build_tour(address, request, limit=120):
+    """Start the build in the editor, which stays usable, and wait for the tour."""
+    request = dict(request, timeout=limit * 0.9)
+    started = rpc(address, 'local t=require("tour"); return (t.ast_tour_start or t.ast_tour)(...)',
+                  [request], timeout=limit)
+    job = started.get('job')
+    if not job:
+        return started
+    give_up = time.monotonic() + limit
+    finished = False
+    try:
+        while time.monotonic() < give_up:
+            state = rpc(address, 'return require("tour").ast_tour_poll(...)', [job], timeout=limit)
+            if not state.get('pending'):
+                finished = True
+                return state['result']
+            time.sleep(0.05)
+        raise RuntimeError(f'The tour was not built within {limit}s')
+    finally:
+        if not finished:
+            try:
+                rpc(address, 'require("tour").ast_tour_cancel(...)', [job])
+            except (OSError, RuntimeError):
+                pass  # the failure being reported matters more
+
+
 def ast_main(argv):
     parser = argparse.ArgumentParser(
         prog='code-tour ast',
@@ -753,7 +779,7 @@ def ast_main(argv):
         current_origin = origin(args, root)
         if current_origin is not None:
             request['origin'] = current_origin
-        result = rpc(target['address'], 'return require("tour").ast_tour(...)', [request], timeout=120)
+        result = build_tour(target['address'], request)
         remember(key, target)
         if result.get('fallback') or args.json:
             print(json.dumps(result))

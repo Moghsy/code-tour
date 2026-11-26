@@ -56,8 +56,9 @@ end
 
 -- Rebuild known entries and through markers after branch switches. Keep the original
 -- recipe so entries can return when their symbols resolve again.
-local function reopen(idx, saved, entries, through, overrides)
+local function reopen(idx, saved, entries, through, overrides, cwd)
   local rt = require("code-tour.ast.route").new(idx)
+  rt.cwd = cwd
   local warnings, remapped = {}, {}
   local function current(list)
     local out = {}
@@ -124,16 +125,17 @@ function M.new(request)
     return nil, "no entry"
   end
   local idx = ast.cached_index({ root = request.root, cache_dir = request.cache_dir })
-  idx.cwd = request.cwd
+  if request.on_index then request.on_index(idx) end
   local current_entries, current_through, ops, missing = entries, through, overrides, {}
   if request.recipe then
-    current_entries, current_through, ops, missing = reopen(idx, saved, entries, through, overrides)
+    current_entries, current_through, ops, missing = reopen(idx, saved, entries, through, overrides, request.cwd)
   end
   local prep, err = outline.prepare(idx, current_entries, {
     detail = detail,
     through = current_through,
     overrides = ops,
     auto = auto,
+    cwd = request.cwd,
     options = { cutoffs = ast.options.cutoffs, main_cap = ast.options.main_cap },
   })
   if not prep then

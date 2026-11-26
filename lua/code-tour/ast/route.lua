@@ -352,8 +352,8 @@ function R:resolve_entry(spec)
     -- Resolve relative paths against the project root, then the working directory.
     local absolute = path:sub(1, 1) == "/" and path or idx:abs(path)
     local rel = idx:rel(absolute)
-    -- the caller's working directory (`idx.cwd`: the CLI's, which the editor does not share)
-    local here = path:sub(1, 1) ~= "/" and idx.cwd and (idx.cwd .. "/" .. path) or path
+    -- the caller's working directory (the CLI's, which the editor does not share)
+    local here = path:sub(1, 1) ~= "/" and self.cwd and (self.cwd .. "/" .. path) or path
     if not idx.file_set[rel] and idx.file_set[idx:rel(here)] then rel = idx:rel(here) end
     if not idx.file_set[rel] then
       if rel:sub(1, 1) ~= "/" and vim.uv.fs_stat(idx:abs(rel)) and not idx:backend(rel) then

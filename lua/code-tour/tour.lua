@@ -1322,8 +1322,17 @@ end
 -- other box "Being written…"), return the outline. request: { entries, root?, detail?,
 -- through?, origin?, cli?, standalone?, send? (deliver the outline to the agent, as
 -- :CodeTourAst does), cache_dir? }.
-function M.ast_tour(request)
-  request = request or {}
+local function ast_refuse_replacing(request)
+  if request.keep_live and s.ast and s.id then
+    -- A second `code-tour ast` would silently discard the live tour and the reader's place in it.
+    local sn = s.ast.snippets and s.ast.snippets.n1
+    error(("A live AST tour (%s%s) is open; adjust it with `code-tour adjust --tour %s`, or pass --force to replace it")
+      :format(s.id, sn and sn.label and (" · " .. sn.label) or "", s.id), 0)
+  end
+end
+
+-- The answers that need no build, or nil.
+local function ast_immediate(request)
   local ast = require("code-tour.ast")
   if not ast.options.enabled then
     return { fallback = true, reason = "ast disabled" }
@@ -1331,15 +1340,13 @@ function M.ast_tour(request)
   if request.auto and not request.recipe and (not request.entries or #request.entries == 0) then
     return ast.outline({}, request)
   end
-  if request.keep_live and s.ast and s.id then
-    -- A second `code-tour ast` would silently discard the live tour and the reader's place in it.
-    local sn = s.ast.snippets and s.ast.snippets.n1
-    error(("A live AST tour (%s%s) is open; adjust it with `code-tour adjust --tour %s`, or pass --force to replace it")
-      :format(s.id, sn and sn.label and (" · " .. sn.label) or "", s.id), 0)
-  end
-  local live, err = require("code-tour.ast.live").new(request)
+  ast_refuse_replacing(request)
+end
+
+-- Show a built tour (or report why there is none).
+local function ast_present(request, live, err)
   if not live then
-    local fallback = ast.fallback_reason(err, request.root)
+    local fallback = require("code-tour.ast").fallback_reason(err, request.root)
     if fallback then return { fallback = true, reason = fallback } end
     error(err, 0)
   end
@@ -1376,6 +1383,123 @@ function M.ast_tour(request)
     end
   end
   return result
+end
+
+local building -- the one tour being built in the background
+
+local function finish_build(job, ok, result)
+  if job.finished then return end
+  job.finished, job.ok, job.result = true, ok, result
+  if job.done then job.done(ok, result) end
+end
+
+-- Another request takes over: whoever waits for the old one is told.
+local function supersede_build()
+  if building then
+    finish_build(building, false, "code-tour: the tour being built was replaced by a newer request")
+    building = nil
+  end
+end
+
+function M.ast_tour(request)
+  request = request or {}
+  local immediate = ast_immediate(request)
+  if immediate then return immediate end
+  supersede_build()
+  return ast_present(request, require("code-tour.ast.live").new(request))
+end
+
+local idle_ns = 30e9 -- a caller that stops asking has given up
+local rebuilds = 2 -- how often files may change under a build before it gives up
+
+-- False when the sources changed since the build read them.
+local function still_current(idx)
+  return not idx or idx:buffers_current()
+    and require("code-tour.ast").index({ root = idx.root, cache_dir = idx.cache_dir }):signature() == idx.signature
+end
+
+-- `ast_tour` without blocking the editor: the tour is built in slices and shown when ready,
+-- once the reader is not typing. It is dropped if the open tour is closed or changed first.
+-- Returns the result at once when nothing needs building, else { job = id }. Without `done`
+-- the caller polls (ast_tour_poll) before `request.timeout` seconds; with it, `done(ok, result)`.
+function M.ast_tour_start(request, done)
+  request = request or {}
+  local immediate = ast_immediate(request)
+  if immediate then
+    if done then done(true, immediate) end
+    return immediate
+  end
+  local slice = require("code-tour.ast.slice")
+  local deadline = require("code-tour.ast.deadline")
+  local now, allowed = vim.uv.hrtime(), request.timeout or 600
+  supersede_build()
+  local job = { id = tostring(now), polled = now, limit = now + allowed * 1e9, tour = s.id, done = done }
+  building = job
+  local idx
+  request = vim.tbl_extend("force", request, { on_index = function(found) idx = found end })
+
+  local function dropped()
+    if building ~= job or job.finished then return true end
+    if s.id ~= job.tour then
+      finish_build(job, false, "code-tour: the open tour changed while this one was being built")
+    elseif vim.uv.hrtime() >= job.limit then
+      finish_build(job, false, "code-tour: building the tour ran out of time and was stopped")
+    elseif not done and vim.uv.hrtime() - job.polled >= idle_ns then
+      finish_build(job, false, "code-tour: nobody was waiting for the tour; it was dropped")
+    end
+    return job.finished
+  end
+
+  local function start(attempt)
+    local function present(live, err)
+      if dropped() then return end
+      -- do not take the screen from someone typing
+      if typing() or vim.fn.getcmdwintype() ~= "" then
+        return vim.defer_fn(function() present(live, err) end, 200)
+      end
+      local ok, result = pcall(function()
+        -- boxes are placed by line: a source edited meanwhile needs a new build
+        if live and not still_current(idx) then
+          assert(attempt <= rebuilds, "code-tour: the sources kept changing while the tour was being built")
+          return nil
+        end
+        ast_refuse_replacing(request)
+        return ast_present(request, live, err)
+      end)
+      if ok and result == nil then return start(attempt + 1) end
+      finish_build(job, ok, result)
+    end
+    slice.run(function()
+      return require("code-tour.ast.live").new(request)
+    end, {
+      alive = function() return not dropped() end,
+      around = function(resume)
+        return deadline.run_until(job.limit, allowed, resume)
+      end,
+      done = function(ok, live, err)
+        if ok then
+          present(live, err)
+        elseif not dropped() then
+          finish_build(job, false, live)
+        end
+      end,
+    })
+  end
+  start(1)
+  return { job = job.id }
+end
+
+function M.ast_tour_poll(id)
+  local job = building
+  assert(job and job.id == id, "The tour being built was replaced by a newer request")
+  job.polled = vim.uv.hrtime()
+  if not job.finished then return { pending = true } end
+  if not job.ok then error(job.result, 0) end
+  return { result = job.result }
+end
+
+function M.ast_tour_cancel(id)
+  if building and building.id == id then building = nil end
 end
 
 -- A fill for an AST snippet (§9.3–9.4): notes go to the store and boxes re-render in
@@ -1523,6 +1647,7 @@ function M.ast_adjust(ops)
     return M.ast_detail(ops.detail)
   end
   assert(ast_guard())
+  live.prep.rt.cwd = ops.cwd
   local normalized, err = require("code-tour.ast.overrides").normalize(live.prep.rt, live:all(), overrides, live.detail)
   assert(normalized, err)
   local recipe = vim.deepcopy(live.recipe)
@@ -2705,12 +2830,19 @@ function M.setup(opts)
       local entry = vim.fn.expand("%:p") .. ":" .. vim.fn.line(".")
       words = { entry }
     end
-    local ok, result = pcall(M.ast_tour, { entries = words, detail = detail, root = vim.fn.getcwd(), send = true,
-      origin = s.origin })
+    local function report(ok, result)
+      if not ok then
+        notify(result)
+      elseif result.fallback then
+        notify("No AST tour: " .. tostring(result.reason))
+      end
+    end
+    local ok, result = pcall(M.ast_tour_start, { entries = words, detail = detail, root = vim.fn.getcwd(), send = true,
+      origin = s.origin }, report)
     if not ok then
       notify(result)
-    elseif result.fallback then
-      notify("No AST tour: " .. tostring(result.reason))
+    elseif result.job then
+      notify("Building the tour…")
     end
   end, { nargs = "*", force = true })
   vim.api.nvim_create_user_command("CodeTourCodeGraph", function()

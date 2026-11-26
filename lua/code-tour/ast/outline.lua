@@ -102,6 +102,7 @@ function M.prepare(idx, specs, opts)
   opts = opts or {}
   specs = specs or {}
   local rt = route.new(idx, opts.options)
+  rt.cwd = opts.cwd
   local entries = {}
   for _, spec in ipairs(specs) do
     local ids, err = rt:resolve_entry(spec)

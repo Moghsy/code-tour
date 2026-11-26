@@ -1,6 +1,7 @@
 -- Test discovery and deterministic example selection (§12).
 local route = require("code-tour.ast.route")
 local deadline = require("code-tour.ast.deadline")
+local slice = require("code-tour.ast.slice")
 local M = {}
 
 local function is_test(sym, owner)
@@ -15,8 +16,12 @@ local function is_test(sym, owner)
     or (sym.id:match("^python:") and sym.name:match("^test_"))
 end
 
--- `pause` is called between units of work: a background build yields there.
-local function build(idx, pause)
+local function pause()
+  slice.point()
+  deadline.check()
+end
+
+local function build(idx)
   local candidates = {}
   for _, file in ipairs(idx:grep("@.*(Test|ParameterizedTest|RepeatedTest)|class[[:space:]]+[[:alnum:]_]+Tests?")) do
     candidates[file] = true
@@ -91,7 +96,7 @@ end
 
 local function catalog(idx)
   if not idx.example_catalog then
-    idx.example_catalog = build(idx, deadline.check)
+    idx.example_catalog = build(idx)
   end
   return idx.example_catalog
 end
@@ -100,11 +105,9 @@ function M.ready(idx)
   return idx.example_catalog ~= nil
 end
 
-local slice_ns = 10e6
-
--- Build the catalog without blocking the editor: in slices of about 10 ms, with input and RPC
--- handled between them. `done` runs when it is ready, if `alive()` still holds. The build is
--- dropped once nobody waiting for it is alive. Returns the job (also `idx.example_job`).
+-- Build the catalog without blocking the editor (slice.lua). `done` runs when it is ready, if
+-- `alive()` still holds. The build is dropped once nobody waiting for it is alive. Returns the
+-- job (also `idx.example_job`).
 function M.prepare(idx, alive, done)
   local waiter = { alive = alive, done = done }
   if idx.example_job then
@@ -113,40 +116,48 @@ function M.prepare(idx, alive, done)
   end
   local job = { waiting = { waiter } }
   idx.example_job = job
-  local slice_end
-  local co = coroutine.create(function()
-    return build(idx, function()
-      if vim.uv.hrtime() >= slice_end then coroutine.yield() end
-    end)
-  end)
-  local function step()
-    if idx.example_job ~= job then return end
-    job.waiting = vim.tbl_filter(function(w) return w.alive() end, job.waiting)
-    if #job.waiting == 0 then
-      idx.example_job = nil
-      return
-    end
-    -- a synchronous caller may have built it meanwhile
-    if not idx.example_catalog then
-      slice_end = vim.uv.hrtime() + slice_ns
-      local ok, result = coroutine.resume(co)
-      if not ok then
-        idx.example_job = nil
-        vim.notify("code-tour: test examples unavailable: " .. tostring(result), vim.log.levels.WARN)
-        return
-      end
-      if coroutine.status(co) ~= "dead" then
-        vim.defer_fn(step, 5)
-        return
-      end
-      idx.example_catalog = result
-    end
+  local function finish()
     idx.example_job = nil
     for _, w in ipairs(job.waiting) do
       w.done()
     end
   end
-  vim.defer_fn(step, 5)
+  local function start()
+    slice.run(function()
+      return build(idx)
+    end, {
+    alive = function()
+      if idx.example_job ~= job then return false end
+      -- what it had read was dropped (Index:reset): begin again
+      if job.restart then
+        job.restart = false
+        start()
+        return false
+      end
+      job.waiting = vim.tbl_filter(function(w) return w.alive() end, job.waiting)
+      if #job.waiting == 0 then
+        idx.example_job = nil
+        return false
+      end
+      -- a synchronous caller may have built it meanwhile
+      if idx.example_catalog then
+        finish()
+        return false
+      end
+      return true
+    end,
+    done = function(ok, result)
+      if not ok then
+        idx.example_job = nil
+        vim.notify("code-tour: test examples unavailable: " .. tostring(result), vim.log.levels.WARN)
+        return
+      end
+      idx.example_catalog = result
+      finish()
+    end,
+    })
+  end
+  start()
   return job
 end
 

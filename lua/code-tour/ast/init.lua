@@ -125,9 +125,10 @@ end
 
 -- The index of an earlier tour when nothing it was built from changed, so parsing,
 -- resolution and the test catalog are not redone. Listing the files is the only cost.
-function M.cached_index(opts)
+-- `purpose` keeps separate caches: a tour adds its own symbols (agent ranges) to its index.
+function M.cached_index(opts, purpose)
   local fresh = M.index(opts)
-  local key = vim.inspect({ fresh.root, (opts or {}).languages or M.options.languages, fresh.ignore,
+  local key = vim.inspect({ purpose or "tour", fresh.root, (opts or {}).languages or M.options.languages, fresh.ignore,
     fresh.max_files, fresh.cache_dir, M.options.boundaries, M.options.synthesizers })
   local signature = fresh:signature()
   local old = indexes[key]
@@ -350,7 +351,6 @@ function M.outline(entries, opts)
     entries = { entries }
   end
   local idx = M.cached_index({ root = opts.root, cache_dir = opts.cache_dir })
-  idx.cwd = opts.cwd
   if opts.auto and (not entries or #entries == 0) then
     return { root = idx.root, auto = true, candidates = require("code-tour.ast.outline").auto_entries(idx), truncated = idx.truncated or nil }
   end
@@ -359,6 +359,7 @@ function M.outline(entries, opts)
     detail = opts.detail or M.options.detail,
     through = opts.through,
     overrides = opts.overrides,
+    cwd = opts.cwd,
     options = {
       cutoffs = M.options.cutoffs,
       main_cap = M.options.main_cap,

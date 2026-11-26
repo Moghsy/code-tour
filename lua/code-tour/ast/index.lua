@@ -2,7 +2,13 @@
 -- extracted facts (cached by git blob SHA), and on-demand discovery of the files that
 -- declare a type, its subtypes, or a method name.
 local deadline = require("code-tour.ast.deadline")
+local slice = require("code-tour.ast.slice")
 local M = {}
+-- where long work may stop (deadline) or let the editor run (slice)
+local function checkpoint()
+  slice.point()
+  deadline.check()
+end
 function M.parser_available(parser)
   local ok, loaded = pcall(vim.treesitter.language.add, parser)
   return ok and loaded == true
@@ -14,17 +20,26 @@ Index.__index = Index
 local fallback_skip = { [".git"] = true, target = true, build = true, out = true, bin = true,
   [".gradle"] = true, [".idea"] = true, node_modules = true }
 
-local function git(root, args, input)
-  local cmd = vim.list_extend({ "git", "-C", root }, args)
-  local r = vim.system(cmd, { text = true, stdin = input }):wait(deadline.remaining())
+-- Wait for a git job within the deadline: its stdout or nil, and its exit code.
+local function finish_git(job)
+  local r = job:wait(deadline.remaining())
+  -- past the deadline `r` may be missing: report the overrun, not that
   deadline.check()
-  return r.code == 0 and r.stdout or nil, r
+  if not r then
+    return nil
+  end
+  return r.code == 0 and r.stdout or nil, r.code
+end
+
+local function git(root, args)
+  local cmd = vim.list_extend({ "git", "-C", root }, args)
+  return (finish_git(vim.system(cmd, { text = true })))
 end
 
 -- Several git commands ({ root, args }) at once, a bounded number at a time. Returns the
--- stdout of each, or false when it failed.
+-- stdout of each (false when it failed) and the exit codes.
 local function git_all(commands)
-  local out = {}
+  local out, codes = {}, {}
   for first = 1, #commands, 16 do
     local jobs = {}
     for i = first, math.min(first + 15, #commands) do
@@ -32,12 +47,11 @@ local function git_all(commands)
       jobs[i] = vim.system(vim.list_extend({ "git", "-C", c[1] }, c[2]), { text = true })
     end
     for i = first, math.min(first + 15, #commands) do
-      local r = jobs[i]:wait(deadline.remaining())
-      out[i] = r.code == 0 and r.stdout or false
+      local stdout, code = finish_git(jobs[i])
+      out[i], codes[i] = stdout or false, code or -1
     end
-    deadline.check()
   end
-  return out
+  return out, codes
 end
 
 local function split0(out)
@@ -156,17 +170,28 @@ function M.new(opts)
     grep_cache = {},
     type_misses = {}, -- "language:qname" looked up and not found
     name_misses = {}, -- simple name -> { language -> true }
+    declaring_files = {}, -- extensions and simple name -> files that declare it
+    expected = {}, -- simple names likely to be looked up, searched together with the next one
     buffered = {}, -- rel -> changedtick of the unsaved buffer its facts came from
     stats = { parsed = 0, cached = 0, buffers = 0 },
     errors = {},
   }, Index)
-  for _, backend in ipairs(list) do
-    if backend.configure then
-      backend.configure(root)
-    end
-  end
+  self:configure()
   self:list_files()
   return self
+end
+
+local configured -- the index whose root's settings the backends hold
+
+-- Backends keep the root's settings in module state, so an index sets them again before
+-- extracting when another index was used since.
+function Index:configure()
+  configured = self
+  for _, backend in ipairs(self.backends) do
+    if backend.configure then
+      backend.configure(self.root)
+    end
+  end
 end
 
 function Index:ignored(rel)
@@ -340,7 +365,11 @@ end
 function Index:reset()
   self.loaded, self.buffered = {}, {}
   self.type_misses, self.name_misses = {}, {}
-  self.example_catalog, self.example_job = nil, nil
+  self.declaring_files, self.expected = {}, {}
+  self.example_catalog = nil
+  if self.example_job then
+    self.example_job.restart = true
+  end
   local r = self.resolver
   if r then
     r.type_cache, r.super_cache, r.subtype_cache, r.resolved_files, r.named_cache = {}, {}, {}, {}, {}
@@ -569,7 +598,7 @@ end
 
 -- Facts for one project file (both passes), parsing at most once per content.
 function Index:facts(rel)
-  deadline.check()
+  checkpoint()
   local cached = self.loaded[rel]
   if cached then
     return cached
@@ -577,6 +606,9 @@ function Index:facts(rel)
   local backend = self:backend(rel)
   if not backend then
     return nil, "no backend"
+  end
+  if configured ~= self then
+    self:configure()
   end
   local parser = M.parser_of(backend, rel)
   if not M.parser_available(parser) then
@@ -686,27 +718,9 @@ function Index:extensions(language)
   return out
 end
 
--- Files whose contents match a regular expression (git grep over the same file set),
--- searching only the file types of `language` (default: all enabled languages).
-function Index:grep(pattern, language)
-  deadline.check()
-  local extensions = self:extensions(language)
-  if #extensions == 0 then
-    return {}
-  end
-  local key = table.concat(extensions, " ") .. "\0" .. pattern
-  local cached = self.grep_cache[key]
-  if cached then
-    return cached
-  end
-  local wanted, found = {}, {}
-  for _, ext in ipairs(extensions) do
-    wanted[ext] = true
-  end
-  -- git greps each checkout (the project's, or each workspace repository), all at once; only
-  -- files outside any checkout are read
-  local unlisted = {}
-  local checkouts = {}
+-- Where to search for files of these extensions: git checkouts, and the files outside any.
+function Index:search_places()
+  local checkouts, unlisted = {}, {}
   if self.workspace then
     for _, repo in ipairs(self.workspace.repos) do
       if vim.uv.fs_stat(repo.root .. "/.git") then
@@ -723,45 +737,162 @@ function Index:grep(pattern, language)
   else
     unlisted = self.files
   end
-  local args = { "grep", "-l", "-z", "--untracked", "-E", "-e", pattern, "--" }
+  return checkouts, unlisted
+end
+
+-- An ERE as a Vim regex; its word boundaries alternate between start-of-word and end-of-word.
+local function vim_regex(pattern)
+  local opening = true
+  local translated = pattern:gsub("\\b", function()
+    local atom = opening and "<" or ">"
+    opening = not opening
+    return atom
+  end)
+  return vim.regex("\\v" .. translated)
+end
+
+-- `git grep` for an ERE in every checkout at once, plus a read of the files outside them.
+-- Calls `found(rel)` once per matching file, or with `matches`, `found(rel, text)` per match.
+-- False when a checkout could not be searched, so the answer must not be remembered.
+function Index:search(pattern, extensions, matches, found)
+  local wanted = {}
+  for _, ext in ipairs(extensions) do
+    wanted[ext] = true
+  end
+  local checkouts, unlisted = self:search_places()
+  local args = { "grep", matches and "-o" or "-l", "-z", "--untracked", "-E", "-e", pattern, "--" }
   for _, ext in ipairs(extensions) do
     args[#args + 1] = "*" .. ext
   end
-  local outputs = git_all(vim.tbl_map(function(checkout)
+  local outputs, codes = git_all(vim.tbl_map(function(checkout)
     return { checkout.root, args }
   end, checkouts))
+  local complete = true
   for i, checkout in ipairs(checkouts) do
-    for _, path in ipairs(split0(outputs[i] or "")) do
+    -- 1 is "no match"; anything else is a failure
+    complete = complete and (codes[i] == 0 or codes[i] == 1)
+    local out = outputs[i] or ""
+    -- `-o -z` prints "path NUL match LF"; `-l -z` prints "path NUL"
+    for path, text in out:gmatch(matches and "([^%z]+)%z([^\n]*)\n" or "([^%z]+)%z()") do
       local rel = checkout.prefix .. path
       if self.file_set[rel] then
-        found[#found + 1] = rel
+        found(rel, text)
       end
     end
   end
-  if #unlisted > 0 then
-    -- ERE word boundaries alternate between Vim's start-of-word and end-of-word atoms
-    local opening = true
-    local translated = pattern:gsub("\\b", function()
-      local atom = opening and "<" or ">"
-      opening = not opening
-      return atom
-    end)
-    local regex = vim.regex("\\v" .. translated)
-    for _, rel in ipairs(unlisted) do
-      deadline.check()
-      for _, line in ipairs(wanted[extension(rel)] and vim.fn.readfile(self:abs(rel)) or {}) do
-        if regex:match_str(line) then
-          found[#found + 1] = rel
-          break
-        end
+  if #unlisted == 0 then
+    return complete
+  end
+  local regex = vim_regex(pattern)
+  for _, rel in ipairs(unlisted) do
+    deadline.check()
+    for _, line in ipairs(wanted[extension(rel)] and vim.fn.readfile(self:abs(rel)) or {}) do
+      local from, to = regex:match_str(line)
+      if from and not matches then
+        found(rel)
+        break
+      end
+      while from do
+        found(rel, line:sub(from + 1, to))
+        line = line:sub(math.max(to, 1) + 1)
+        from, to = regex:match_str(line)
       end
     end
   end
+  return complete
+end
+
+-- Files whose contents match a regular expression (git grep over the same file set),
+-- searching only the file types of `language` (default: all enabled languages).
+function Index:grep(pattern, language)
+  checkpoint()
+  local extensions = self:extensions(language)
+  if #extensions == 0 then
+    return {}
+  end
+  local key = table.concat(extensions, " ") .. "\0" .. pattern
+  local cached = self.grep_cache[key]
+  if cached then
+    return cached
+  end
+  local found = {}
+  local complete = self:search(pattern, extensions, false, function(rel)
+    found[#found + 1] = rel
+  end)
   if self.workspace then
     table.sort(found)
   end
-  self.grep_cache[key] = found
+  if complete then
+    self.grep_cache[key] = found
+  end
   return found
+end
+
+-- Names a file mentions that may need looking up: they are searched in one batch.
+function Index:expect(facts)
+  local seen = {}
+  local function walk(value)
+    if type(value) == "string" then
+      for word in value:gmatch("%f[%w_]%u[%w_]*") do
+        self.expected[word] = true
+      end
+    elseif type(value) == "table" and not seen[value] then
+      seen[value] = true
+      for _, item in pairs(value) do
+        walk(item)
+      end
+    end
+  end
+  walk({ facts.imports, facts.symbols, facts.bodies })
+end
+
+local batch_size = 400
+
+-- The files that declare a type of this name. One search answers for the expected names too.
+function Index:declaring(name, language)
+  checkpoint()
+  local extensions = self:extensions(language)
+  -- a name goes into a regular expression: anything but an identifier declares no type
+  if #extensions == 0 or not name:match("^[%w_$\128-\255]+$") then
+    return {}
+  end
+  local prefix = table.concat(extensions, " ") .. "\0"
+  local cached = self.declaring_files[prefix .. name]
+  if cached then
+    return cached
+  end
+  local names, wanted = { name }, { [name] = {} }
+  for other in pairs(self.expected) do
+    if #names >= batch_size then
+      break
+    end
+    if not wanted[other] and not self.declaring_files[prefix .. other] then
+      names[#names + 1], wanted[other] = other, {}
+    end
+  end
+  local keywords = "class|interface|enum|record"
+  -- TypeScript and JavaScript also declare types as `type X = {…}` and `const X = {…}`
+  if language ~= "java" and self.by_ext[".ts"] then
+    keywords = keywords .. "|type|const|let|var"
+  end
+  local pattern = "\\b(" .. keywords .. ")\\s+(" .. table.concat(names, "|"):gsub("%$", "[$]") .. ")\\b"
+  local listed = {}
+  local complete = self:search(pattern, extensions, true, function(rel, text)
+    local declared = text:match("([^%s]+)$")
+    if wanted[declared] and not listed[declared .. "\0" .. rel] then
+      listed[declared .. "\0" .. rel] = true
+      table.insert(wanted[declared], rel)
+    end
+  end)
+  for _, each in ipairs(names) do
+    if self.workspace then
+      table.sort(wanted[each])
+    end
+    if complete then
+      self.declaring_files[prefix .. each] = wanted[each]
+    end
+  end
+  return wanted[name]
 end
 
 -- The type symbol with qualified name `qname`, loading the file that declares it.
@@ -805,12 +936,7 @@ function Index:declarations_named(name, language)
   if misses and misses[language or ""] then
     return {}
   end
-  local pattern = "\\b(class|interface|enum|record)\\s+" .. name .. "\\b"
-  -- TypeScript and JavaScript also declare types as `type X = {…}` and `const X = {…}`
-  if language ~= "java" and self.by_ext[".ts"] then
-    pattern = "\\b(class|interface|enum|record|type|const|let|var)\\s+" .. name .. "\\b"
-  end
-  for _, file in ipairs(self:grep(pattern, language)) do
+  for _, file in ipairs(self:declaring(name, language)) do
     if not language or self:backend(file).name == language then
       self:facts(file)
     end
@@ -827,7 +953,9 @@ function Index:declarations_named(name, language)
   table.sort(out, function(a, b)
     return a.id < b.id
   end)
-  if #out == 0 then
+  local extensions = table.concat(self:extensions(language), " ")
+  -- remember the miss only when the search itself succeeded
+  if #out == 0 and self.declaring_files[extensions .. "\0" .. name] then
     self.name_misses[name] = self.name_misses[name] or {}
     self.name_misses[name][language or ""] = true
   end

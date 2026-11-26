@@ -31,9 +31,10 @@ function M.finish()
   limit = nil
 end
 
-function M.run(secs, fn, ...)
+-- Run `fn` until `at` (hrtime), a part of an allowance of `secs` seconds.
+function M.run_until(at, secs, fn, ...)
   local outer_limit, outer_seconds = limit, seconds
-  limit, seconds = vim.uv.hrtime() + secs * 1e9, math.floor(secs)
+  limit, seconds = at, math.floor(secs)
   local result = { pcall(fn, ...) }
   local overran = M.expired()
   limit, seconds = outer_limit, outer_seconds
@@ -46,6 +47,10 @@ function M.run(secs, fn, ...)
     error(result[2], 0)
   end
   return unpack(result, 2, table.maxn(result))
+end
+
+function M.run(secs, fn, ...)
+  return M.run_until(vim.uv.hrtime() + secs * 1e9, secs, fn, ...)
 end
 
 return M

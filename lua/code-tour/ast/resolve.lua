@@ -6,6 +6,7 @@
 -- project name, dispatch); AMBIGUOUS when several candidates are kept. A call is never bound
 -- by its bare name: without a receiver type it stays unresolved.
 local deadline = require("code-tour.ast.deadline")
+local slice = require("code-tour.ast.slice")
 local M = {}
 
 local STOPLIST = {}
@@ -242,6 +243,10 @@ end
 
 -- { superclass = resolved|nil, interfaces = {resolved...}, all = {...} }
 function R:supertypes(t)
+  return slice.atomic(self.supertypes_of, self, t)
+end
+
+function R:supertypes_of(t)
   local hit = self.super_cache[t.id]
   if hit then
     return hit
@@ -691,6 +696,10 @@ end
 
 -- Direct and transitive project subtypes of a type.
 function R:subtypes(t)
+  return slice.atomic(self.subtypes_of, self, t)
+end
+
+function R:subtypes_of(t)
   local hit = self.subtype_cache[t.id]
   if hit then
     return hit
@@ -1004,11 +1013,17 @@ function R:resolve_file(rel)
   if self.resolved_files[rel] then
     return self.idx:facts(rel)
   end
-  self.resolved_files[rel] = true
   local facts = self.idx:facts(rel)
-  if not facts then
-    return nil
+  -- (another slice may have resolved it while this one waited)
+  if not facts or self.resolved_files[rel] then
+    return facts
   end
+  return slice.atomic(self.resolve_bodies, self, rel, facts)
+end
+
+function R:resolve_bodies(rel, facts)
+  self.resolved_files[rel] = true
+  self.idx:expect(facts)
   local ids = vim.tbl_keys(facts.bodies)
   table.sort(ids)
   for _, id in ipairs(ids) do

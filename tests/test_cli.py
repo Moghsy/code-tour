@@ -285,6 +285,13 @@ class RPCIntegrationTests(unittest.TestCase):
         result = self.run_cli(data=json.dumps([dict(file='source.lua', start=1, end=3, note='Source')]), expected=2)
         self.assertEqual(len(json.loads(result.stderr)['instances']), 2)
 
+    def test_long_requests_stop_in_the_editor_before_the_caller_gives_up(self):
+        address = self.addresses[0]
+        busy = 'local d=require("code-tour.ast.deadline"); while true do d.check() end'
+        with self.assertRaisesRegex(RuntimeError, 'was stopped'):
+            cli.rpc(address, busy, timeout=15)
+        self.assertEqual(cli.rpc(address, 'return ...', ['still responding'], timeout=15), 'still responding')
+
     def test_show_append_answer_and_fill_over_real_rpc(self):
         address = self.addresses[0]
         result = self.run_cli('--pane', address, 'source.lua:1-3')

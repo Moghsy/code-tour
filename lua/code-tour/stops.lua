@@ -121,7 +121,8 @@ end
 function M.normalize(input, root)
   assert(type(input) == "table" and vim.islist(input) and #input > 0, "Expected a nonempty JSON list of stops")
   local result = {}
-  root = vim.fs.normalize(root)
+  -- stop paths are real paths, so the root they are made relative to must be one too
+  root = vim.fs.normalize(vim.uv.fs_realpath(vim.fs.normalize(root)) or root)
   local function normalize(stop, parent_stop, parent_box)
     -- Generation evidence is host-owned; author payloads cannot assert it.
     for key in pairs(stop) do

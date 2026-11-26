@@ -57,8 +57,8 @@ end
 M.ordered = ordered
 
 local function file_lines(idx, file)
-  local buf = vim.fn.bufnr(idx:abs(file))
-  local loaded = buf > 0 and vim.api.nvim_buf_is_loaded(buf)
+  local buf = require("code-tour.ast.index").buffer(idx:abs(file))
+  local loaded = buf ~= nil
   if loaded and vim.bo[buf].modified then
     return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   end
@@ -352,7 +352,9 @@ function R:resolve_entry(spec)
     -- Resolve relative paths against the project root, then the working directory.
     local absolute = path:sub(1, 1) == "/" and path or idx:abs(path)
     local rel = idx:rel(absolute)
-    if not idx.file_set[rel] and idx.file_set[idx:rel(path)] then rel = idx:rel(path) end
+    -- the caller's working directory (`idx.cwd`: the CLI's, which the editor does not share)
+    local here = path:sub(1, 1) ~= "/" and idx.cwd and (idx.cwd .. "/" .. path) or path
+    if not idx.file_set[rel] and idx.file_set[idx:rel(here)] then rel = idx:rel(here) end
     if not idx.file_set[rel] then
       if rel:sub(1, 1) ~= "/" and vim.uv.fs_stat(idx:abs(rel)) and not idx:backend(rel) then
         return nil, "no backend for " .. rel

@@ -20,6 +20,7 @@ local function live_for(opts)
     root = opts.root,
     through = opts.through,
     overrides = opts.overrides,
+    cwd = opts.cwd,
   })
   if not live then
     error(err, 0)
@@ -340,6 +341,7 @@ function M.run(action, opts)
     return note(opts)
   end
   local idx = ast.index({ root = opts.root })
+  idx.cwd = opts.cwd
   if action == "prune" then
     return require("code-tour.ast.store").new(idx, ast.options):prune()
   end

@@ -774,6 +774,10 @@ The agent should invent as little as possible: the project's tests and its runni
 - Runs happen in the background and never block the tour. A failed or timed-out run falls back to the next source.
 - Everything degrades gracefully: without a debugger, tests are still offered (1); without tests, examples are generated (4).
 
+Finding tests resolves every test in the index, so the editor never does it while a request waits: the tour is shown first, the catalog is built in the background in slices of about 10 ms, and the test examples join the tour when it is ready. Queries that need the answer (`explain`, `impact`) build it synchronously.
+
+An editor reuses a project's index, with its parsed facts, resolution and test catalog, while the files, unsaved buffers, path aliases and configuration it was built from are unchanged. Every CLI request that may run long carries a deadline slightly shorter than the CLI's own timeout; past it the editor stops, drops what was half resolved and reports the overrun. A tour that is already being shown is finished.
+
 ## 13. Using the store while coding
 
 Like graphify, whose `query`, `path` and `explain` commands let an agent consult the graph before touching code, the symbol graph and the note store serve any coding agent, not only tours. An agent about to change code it has not read can learn the main flow, the explanations already written, the callers that depend on it and the tests that exercise it, without reading every file.
@@ -905,6 +909,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py'
 | `tests/ast_project.lua`, `tests/ast_render.lua`, `tests/ast_detail.lua` | projection, badges, note display, detail round-trips and reader position |
 | `tests/ast_stream.lua`, `tests/ast_fill.lua`, `tests/ast_expand.lua`, `tests/ast_live.lua` | partial and revised fills, lazy calls, stale-fill rejection, selection and live state |
 | `tests/ast_store.lua` | worktree and user stores, conflicts, versions, relocation, freshness, Q&A, concurrent fills, history and pruning |
+| `tests/ast_cache.lua` | index reuse, remembered lookup misses, per-language greps, deadlines and path spelling |
 | `tests/ast_examples.lua`, `tests/ast_recordings.lua` | test ranking and navigation, consent, executed example Q&A, recording fingerprints and mocked debugger lifecycle |
 | `tests/ast_tiers.lua` | tier rules, brief contents, previous stale text and model attribution |
 | `tests/ast_enrichment.lua`, `tests/ast_fallback.lua` | hints, entry candidates, overrides, parser errors, missing backends and agent-authored ranges |

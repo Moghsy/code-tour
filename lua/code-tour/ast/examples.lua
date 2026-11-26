@@ -1,5 +1,6 @@
 -- Test discovery and deterministic example selection (§12).
 local route = require("code-tour.ast.route")
+local deadline = require("code-tour.ast.deadline")
 local M = {}
 
 local function is_test(sym, owner)
@@ -14,8 +15,8 @@ local function is_test(sym, owner)
     or (sym.id:match("^python:") and sym.name:match("^test_"))
 end
 
-local function catalog(idx)
-  if idx.example_catalog then return idx.example_catalog end
+-- `pause` is called between units of work: a background build yields there.
+local function build(idx, pause)
   local candidates = {}
   for _, file in ipairs(idx:grep("@.*(Test|ParameterizedTest|RepeatedTest)|class[[:space:]]+[[:alnum:]_]+Tests?")) do
     candidates[file] = true
@@ -26,6 +27,7 @@ local function catalog(idx)
     if candidates[file] or file:match("^tests?/") or file:match("/tests?/")
         or base:match("Tests?%.java$") or base:match("^test_.*%.py$") or base:match("_test%.py$")
         or base:match("%.test%.[mc]?[tj]sx?$") or base:match("%.spec%.[mc]?[tj]sx?$") or file:match("__tests__/") then
+      pause()
       idx:facts(file)
       count = count + 1
       if count >= idx.max_files then break end
@@ -41,6 +43,7 @@ local function catalog(idx)
       local at = queue[head]
       head = head + 1
       if dist[at].depth < 4 then
+        pause()
         local body = rt:body(at)
         for _, site in ipairs(body and body.sites or {}) do
           for _, t in ipairs(site.targets or {}) do
@@ -60,6 +63,7 @@ local function catalog(idx)
   for _, id in ipairs(ids) do
     local sym = idx.symbols[id]
     if is_test(sym, sym.owner and idx:symbol(sym.owner)) then
+      pause()
       local body = rt:body(id)
       if body then
         local targets, assertions = {}, 0
@@ -82,8 +86,68 @@ local function catalog(idx)
       end
     end
   end
-  idx.example_catalog = tests
   return tests
+end
+
+local function catalog(idx)
+  if not idx.example_catalog then
+    idx.example_catalog = build(idx, deadline.check)
+  end
+  return idx.example_catalog
+end
+
+function M.ready(idx)
+  return idx.example_catalog ~= nil
+end
+
+local slice_ns = 10e6
+
+-- Build the catalog without blocking the editor: in slices of about 10 ms, with input and RPC
+-- handled between them. `done` runs when it is ready, if `alive()` still holds. The build is
+-- dropped once nobody waiting for it is alive. Returns the job (also `idx.example_job`).
+function M.prepare(idx, alive, done)
+  local waiter = { alive = alive, done = done }
+  if idx.example_job then
+    table.insert(idx.example_job.waiting, waiter)
+    return idx.example_job
+  end
+  local job = { waiting = { waiter } }
+  idx.example_job = job
+  local slice_end
+  local co = coroutine.create(function()
+    return build(idx, function()
+      if vim.uv.hrtime() >= slice_end then coroutine.yield() end
+    end)
+  end)
+  local function step()
+    if idx.example_job ~= job then return end
+    job.waiting = vim.tbl_filter(function(w) return w.alive() end, job.waiting)
+    if #job.waiting == 0 then
+      idx.example_job = nil
+      return
+    end
+    -- a synchronous caller may have built it meanwhile
+    if not idx.example_catalog then
+      slice_end = vim.uv.hrtime() + slice_ns
+      local ok, result = coroutine.resume(co)
+      if not ok then
+        idx.example_job = nil
+        vim.notify("code-tour: test examples unavailable: " .. tostring(result), vim.log.levels.WARN)
+        return
+      end
+      if coroutine.status(co) ~= "dead" then
+        vim.defer_fn(step, 5)
+        return
+      end
+      idx.example_catalog = result
+    end
+    idx.example_job = nil
+    for _, w in ipairs(job.waiting) do
+      w.done()
+    end
+  end
+  vim.defer_fn(step, 5)
+  return job
 end
 
 function M.tests(idx, targets, max_depth)

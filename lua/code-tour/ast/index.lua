@@ -1,6 +1,7 @@
 -- The project index (SPEC-ast-graph §4.3): which files belong to the project, their
 -- extracted facts (cached by git blob SHA), and on-demand discovery of the files that
 -- declare a type, its subtypes, or a method name.
+local deadline = require("code-tour.ast.deadline")
 local M = {}
 function M.parser_available(parser)
   local ok, loaded = pcall(vim.treesitter.language.add, parser)
@@ -15,8 +16,28 @@ local fallback_skip = { [".git"] = true, target = true, build = true, out = true
 
 local function git(root, args, input)
   local cmd = vim.list_extend({ "git", "-C", root }, args)
-  local r = vim.system(cmd, { text = true, stdin = input }):wait()
+  local r = vim.system(cmd, { text = true, stdin = input }):wait(deadline.remaining())
+  deadline.check()
   return r.code == 0 and r.stdout or nil, r
+end
+
+-- Several git commands ({ root, args }) at once, a bounded number at a time. Returns the
+-- stdout of each, or false when it failed.
+local function git_all(commands)
+  local out = {}
+  for first = 1, #commands, 16 do
+    local jobs = {}
+    for i = first, math.min(first + 15, #commands) do
+      local c = commands[i]
+      jobs[i] = vim.system(vim.list_extend({ "git", "-C", c[1] }, c[2]), { text = true })
+    end
+    for i = first, math.min(first + 15, #commands) do
+      local r = jobs[i]:wait(deadline.remaining())
+      out[i] = r.code == 0 and r.stdout or false
+    end
+    deadline.check()
+  end
+  return out
 end
 
 local function split0(out)
@@ -27,17 +48,53 @@ local function split0(out)
   return list
 end
 
+-- Absolute, without "." and ".." segments or a trailing slash. Symlinks are kept.
+local function absolute(path)
+  return (vim.fs.normalize(vim.fn.simplify(vim.fn.fnamemodify(path, ":p"))):gsub("(.)/$", "%1"))
+end
+
+-- The one spelling of a path: absolute with symlinks resolved, as far as the path exists.
+-- Roots, repositories and the files looked up in them are all compared in this form.
+function M.realpath(path)
+  path = absolute(path)
+  local head, tail = path, {}
+  while true do
+    local real = vim.uv.fs_realpath(head)
+    if real then
+      table.insert(tail, 1, real)
+      return vim.fs.normalize(table.concat(tail, "/"))
+    end
+    local parent = vim.fs.dirname(head)
+    if parent == head then
+      return path
+    end
+    table.insert(tail, 1, vim.fs.basename(head))
+    head = parent
+  end
+end
+
+-- The loaded buffer of a file. `bufnr()` takes a pattern, which misreads names such as
+-- `[id].tsx`; `bufexists()` compares whole names.
+function M.buffer(path)
+  if vim.fn.bufexists(path) == 1 then
+    local buf = vim.fn.bufadd(path)
+    if vim.api.nvim_buf_is_loaded(buf) then
+      return buf
+    end
+  end
+end
+
 -- The project root: the git top level of `path`, or `path` itself.
 function M.root(path)
-  path = vim.fs.normalize(vim.fn.fnamemodify(path or vim.fn.getcwd(), ":p"))
+  path = M.realpath(path or vim.fn.getcwd())
   if vim.fn.isdirectory(path) == 0 then
     path = vim.fs.dirname(path)
   end
   local out = git(path, { "rev-parse", "--show-toplevel" })
   if out then
-    return vim.fs.normalize(vim.trim(out)), true
+    return M.realpath(vim.trim(out)), true
   end
-  return path:gsub("/$", ""), false
+  return path, false
 end
 
 local function backends(names)
@@ -71,6 +128,12 @@ function M.new(opts)
   local workspace = opts.workspace or require("code-tour.workspace").resolve(opts.root or vim.fn.getcwd())
   local root, is_git
   if workspace then
+    workspace = vim.deepcopy(workspace)
+    workspace.root = M.realpath(workspace.root)
+    workspace.main = workspace.main and M.realpath(workspace.main)
+    for _, repo in ipairs(workspace.repos) do
+      repo.root = M.realpath(repo.root)
+    end
     root, is_git = workspace.root, false
   else
     root, is_git = M.root(opts.root)
@@ -91,6 +154,9 @@ function M.new(opts)
     symbols = {}, -- id -> symbol
     type_files = {}, -- type ID -> rel path
     grep_cache = {},
+    type_misses = {}, -- "language:qname" looked up and not found
+    name_misses = {}, -- simple name -> { language -> true }
+    buffered = {}, -- rel -> changedtick of the unsaved buffer its facts came from
     stats = { parsed = 0, cached = 0, buffers = 0 },
     errors = {},
   }, Index)
@@ -126,30 +192,47 @@ local function walk_files(dir, rel, out)
   end
 end
 
--- The files of one git checkout at `dir`: candidates (tracked plus untracked, not ignored) and
--- the blob SHA of each file git can vouch for. `prefix` places them under the project root.
-local function git_files(dir, prefix, candidates, blobs)
-  local function place(path)
-    return prefix and (prefix .. "/" .. path) or path
-  end
-  for _, path in ipairs(split0(git(dir, { "ls-files", "-z", "--cached", "--others", "--exclude-standard" }))) do
-    candidates[#candidates + 1] = place(path)
-  end
-  for _, line in ipairs(split0(git(dir, { "ls-files", "-s", "-z" }))) do
-    local sha, path = line:match("^%d+ (%x+) %d+\t(.*)$")
-    if sha then
-      blobs[place(path)] = sha
+-- The files of git checkouts ({ dir, prefix }), listed at once: candidates (tracked plus
+-- untracked, not ignored) and the blob SHA of each file git can vouch for. `prefix` places
+-- them under the project root.
+local function git_files(checkouts, candidates, blobs)
+  local queries = {
+    { "ls-files", "-z", "--cached", "--others", "--exclude-standard" },
+    { "ls-files", "-s", "-z" },
+    { "ls-files", "-m", "-z" },
+    { "ls-files", "-v", "-z" },
+  }
+  local commands = {}
+  for _, checkout in ipairs(checkouts) do
+    for _, args in ipairs(queries) do
+      commands[#commands + 1] = { checkout.dir, args }
     end
   end
-  -- the index SHA is wrong for files modified in the working tree, and git does not
-  -- report modifications of assume-unchanged (lowercase tag) or skip-worktree (S) files
-  for _, path in ipairs(split0(git(dir, { "ls-files", "-m", "-z" }))) do
-    blobs[place(path)] = nil
-  end
-  for _, line in ipairs(split0(git(dir, { "ls-files", "-v", "-z" }))) do
-    local tag, path = line:match("^(%S) (.*)$")
-    if tag and (tag:match("%l") or tag == "S") then
+  local out = git_all(commands)
+  for k, checkout in ipairs(checkouts) do
+    local function place(path)
+      return checkout.prefix and (checkout.prefix .. "/" .. path) or path
+    end
+    local at = (k - 1) * #queries
+    for _, path in ipairs(split0(out[at + 1] or "")) do
+      candidates[#candidates + 1] = place(path)
+    end
+    for _, line in ipairs(split0(out[at + 2] or "")) do
+      local sha, path = line:match("^%d+ (%x+) %d+\t(.*)$")
+      if sha then
+        blobs[place(path)] = sha
+      end
+    end
+    -- the index SHA is wrong for files modified in the working tree, and git does not
+    -- report modifications of assume-unchanged (lowercase tag) or skip-worktree (S) files
+    for _, path in ipairs(split0(out[at + 3] or "")) do
       blobs[place(path)] = nil
+    end
+    for _, line in ipairs(split0(out[at + 4] or "")) do
+      local tag, path = line:match("^(%S) (.*)$")
+      if tag and (tag:match("%l") or tag == "S") then
+        blobs[place(path)] = nil
+      end
     end
   end
 end
@@ -170,9 +253,10 @@ function Index:list_files()
       return #a.dir > #b.dir
     end)
     vim.list_extend(self.repo_list, self.attached or {})
+    local checkouts = {}
     for _, repo in ipairs(self.workspace.repos) do
       if vim.uv.fs_stat(repo.root .. "/.git") then
-        git_files(repo.root, repo.dir, candidates, self.blobs)
+        checkouts[#checkouts + 1] = { dir = repo.root, prefix = repo.dir }
       else
         local found = {}
         walk_files(repo.root, nil, found)
@@ -181,15 +265,19 @@ function Index:list_files()
         end
       end
     end
+    git_files(checkouts, candidates, self.blobs)
   elseif self.git then
-    git_files(self.root, nil, candidates, self.blobs)
+    git_files({ { dir = self.root } }, candidates, self.blobs)
   else
     walk_files(self.root, nil, candidates)
   end
   local seen = {}
+  self.stamps = {}
   for _, rel in ipairs(candidates) do
-    if not seen[rel] and self.by_ext[extension(rel) or ""] and not self:ignored(rel)
-        and vim.uv.fs_stat(self:abs(rel)) then
+    local stat = not seen[rel] and self.by_ext[extension(rel) or ""] and not self:ignored(rel)
+      and vim.uv.fs_stat(self:abs(rel))
+    if stat then
+      self.stamps[rel] = ("%d.%d:%d"):format(stat.mtime.sec, stat.mtime.nsec, stat.size)
       seen[rel] = true
       self.files[#self.files + 1] = rel
       self.file_set[rel] = true
@@ -203,6 +291,60 @@ function Index:list_files()
       self.modules[key] = self.modules[key] or {}
       table.insert(self.modules[key], rel)
     end
+  end
+end
+
+-- Everything the index was built from: when it is unchanged, the index can be used again.
+function Index:signature()
+  local parts = { self.root }
+  for _, repo in ipairs(self.workspace and self.workspace.repos or {}) do
+    parts[#parts + 1] = repo.dir .. "=" .. repo.root
+  end
+  for _, rel in ipairs(self.files) do
+    parts[#parts + 1] = rel .. " " .. self.stamps[rel]
+  end
+  -- path aliases are read from these (lang/typescript.lua)
+  for _, name in ipairs({ "tsconfig.json", "tsconfig.base.json", "jsconfig.json" }) do
+    local stat = vim.uv.fs_stat(self.root .. "/" .. name)
+    if stat then
+      parts[#parts + 1] = ("%s %d.%d:%d"):format(name, stat.mtime.sec, stat.mtime.nsec, stat.size)
+    end
+  end
+  local unsaved = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name ~= "" and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified then
+      local rel = self:rel(name)
+      if self.file_set[rel] then
+        unsaved[#unsaved + 1] = rel .. " @" .. vim.api.nvim_buf_get_changedtick(buf)
+      end
+    end
+  end
+  table.sort(unsaved)
+  return vim.fn.sha256(table.concat(vim.list_extend(parts, unsaved), "\n"))
+end
+
+-- False once facts read from an unsaved buffer no longer match that buffer.
+function Index:buffers_current()
+  for rel, tick in pairs(self.buffered) do
+    local buf = M.buffer(self:abs(rel))
+    if not (buf and vim.bo[buf].modified and vim.api.nvim_buf_get_changedtick(buf) == tick) then
+      return false
+    end
+  end
+  return true
+end
+
+-- Drop everything derived from the files, in place, so holders of this index and of its
+-- resolver read afresh. Used when a request stops half way through resolution.
+function Index:reset()
+  self.loaded, self.buffered = {}, {}
+  self.type_misses, self.name_misses = {}, {}
+  self.example_catalog, self.example_job = nil, nil
+  local r = self.resolver
+  if r then
+    r.type_cache, r.super_cache, r.subtype_cache, r.resolved_files, r.named_cache = {}, {}, {}, {}, {}
+    r.global_names, r.boundary_cache = nil, nil
   end
 end
 
@@ -220,7 +362,7 @@ function Index:attach(path, repo)
       end
     end
   else
-    path = vim.fs.normalize(vim.fn.simplify(vim.fn.fnamemodify(path, ":p")))
+    path = M.realpath(path)
     for _, known in ipairs(self.attached) do
       if path:sub(1, #known.root + 1) == known.root .. "/" then
         return known, known.dir .. "/" .. path:sub(#known.root + 2)
@@ -228,7 +370,7 @@ function Index:attach(path, repo)
     end
     local dir = vim.fs.dirname(path)
     local top = vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait()
-    local root = top.code == 0 and vim.fs.normalize(vim.trim(top.stdout)) or dir
+    local root = top.code == 0 and M.realpath(vim.trim(top.stdout)) or dir
     local name, taken = "@" .. vim.fs.basename(root), {}
     for _, known in ipairs(self.attached) do
       taken[known.dir] = true
@@ -260,8 +402,8 @@ function Index:abs(rel)
   return (repo and repo.root or self.root) .. "/" .. (repo and inside or rel)
 end
 
-function Index:rel(path)
-  path = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+-- `rel` for a path under the project or one of its repositories, else nil.
+function Index:inside(path)
   local inside = path:sub(1, #self.root + 1) == self.root .. "/"
   for _, repo in ipairs(self.repo_list or {}) do
     -- an attached checkout may contain the project itself; the project's own files stay its own
@@ -269,10 +411,21 @@ function Index:rel(path)
       return repo.dir .. "/" .. path:sub(#repo.root + 2)
     end
   end
-  if path:sub(1, #self.root + 1) == self.root .. "/" then
+  if inside then
     return path:sub(#self.root + 2)
   end
-  return path
+end
+
+-- The project path of a file however it is spelled; outside the project, its real path.
+function Index:rel(path)
+  -- as written first, so a symlink tracked inside the project keeps its own name
+  local plain = absolute(path)
+  local found = self:inside(plain)
+  if found and (not self.file_set or self.file_set[found]) then
+    return found
+  end
+  local real = M.realpath(plain)
+  return self:inside(real) or found or real
 end
 
 -- The git checkout that holds `rel`, and the path inside it: the workspace repository, or the
@@ -320,21 +473,49 @@ end
 
 -- Content identity: a loaded, modified buffer by changedtick; otherwise the blob SHA.
 local function buffer_for(path)
-  local buf = vim.fn.bufnr(path)
-  if buf > 0 and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified then
+  local buf = M.buffer(path)
+  if buf and vim.bo[buf].modified then
     return buf
   end
 end
 
+-- Hash every file git could not vouch for in one call per checkout.
+function Index:hash_files()
+  self.hashed = true
+  local groups = {}
+  for _, rel in ipairs(self.files) do
+    if not self.blobs[rel] then
+      local dir, inside = self:git_dir(rel)
+      if dir then
+        groups[dir] = groups[dir] or {}
+        table.insert(groups[dir], { rel = rel, path = inside })
+      end
+    end
+  end
+  for dir, list in pairs(groups) do
+    for first = 1, #list, 200 do
+      local args = { "hash-object", "--" }
+      for i = first, math.min(first + 199, #list) do
+        args[#args + 1] = list[i].path
+      end
+      local k = first
+      for sha in (git(dir, args) or ""):gmatch("%x+") do
+        self.blobs[list[k].rel] = sha
+        k = k + 1
+      end
+    end
+  end
+end
+
 function Index:blob(rel)
+  if not self.blobs[rel] and not self.hashed then
+    self:hash_files()
+  end
   local sha = self.blobs[rel]
   if not sha then
-    local repo, inside = self:repo_of(rel)
-    if repo and vim.uv.fs_stat(repo.root .. "/.git") then
-      local out = git(repo.root, { "hash-object", "--", inside })
-      sha = out and vim.trim(out)
-    elseif self.git then
-      local out = git(self.root, { "hash-object", "--", rel })
+    local dir, inside = self:git_dir(rel)
+    if dir then
+      local out = git(dir, { "hash-object", "--", inside })
       sha = out and vim.trim(out)
     end
     if not sha then
@@ -388,6 +569,7 @@ end
 
 -- Facts for one project file (both passes), parsing at most once per content.
 function Index:facts(rel)
+  deadline.check()
   local cached = self.loaded[rel]
   if cached then
     return cached
@@ -408,6 +590,7 @@ function Index:facts(rel)
   if buf then
     -- one entry per buffer, valid for one changedtick
     local tick = vim.api.nvim_buf_get_changedtick(buf)
+    self.buffered[rel] = tick
     local entry = M.buffer_cache[buf]
     if entry and entry.tick == tick and entry.backend == backend.name then
       facts = rebase(vim.deepcopy(entry.facts), rel)
@@ -452,6 +635,11 @@ function Index:facts(rel)
   end
   for _, id in pairs(facts.types) do
     self.type_files[id] = self.type_files[id] or rel
+    -- a type that appears only now (synthesized ones are not in any text) is no longer missing
+    local sym = facts.symbols[id]
+    if sym then
+      self.name_misses[sym.name] = nil
+    end
   end
   return facts
 end
@@ -486,15 +674,37 @@ function Index:qualified_symbol(language, qname)
   end
 end
 
--- Files whose contents match a regular expression (git grep over the same file set).
-function Index:grep(pattern)
-  local cached = self.grep_cache[pattern]
+-- The extensions to search: one language's, or every enabled one's.
+function Index:extensions(language)
+  local out = {}
+  for ext, backend in pairs(self.by_ext) do
+    if not language or backend.name == language then
+      out[#out + 1] = ext
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+-- Files whose contents match a regular expression (git grep over the same file set),
+-- searching only the file types of `language` (default: all enabled languages).
+function Index:grep(pattern, language)
+  deadline.check()
+  local extensions = self:extensions(language)
+  if #extensions == 0 then
+    return {}
+  end
+  local key = table.concat(extensions, " ") .. "\0" .. pattern
+  local cached = self.grep_cache[key]
   if cached then
     return cached
   end
-  local found = {}
-  -- git greps each checkout (the project's, or each workspace repository); only files outside
-  -- any checkout are read
+  local wanted, found = {}, {}
+  for _, ext in ipairs(extensions) do
+    wanted[ext] = true
+  end
+  -- git greps each checkout (the project's, or each workspace repository), all at once; only
+  -- files outside any checkout are read
   local unlisted = {}
   local checkouts = {}
   if self.workspace then
@@ -513,9 +723,15 @@ function Index:grep(pattern)
   else
     unlisted = self.files
   end
-  for _, checkout in ipairs(checkouts) do
-    local out = git(checkout.root, { "grep", "-l", "-z", "--untracked", "-E", pattern })
-    for _, path in ipairs(split0(out)) do
+  local args = { "grep", "-l", "-z", "--untracked", "-E", "-e", pattern, "--" }
+  for _, ext in ipairs(extensions) do
+    args[#args + 1] = "*" .. ext
+  end
+  local outputs = git_all(vim.tbl_map(function(checkout)
+    return { checkout.root, args }
+  end, checkouts))
+  for i, checkout in ipairs(checkouts) do
+    for _, path in ipairs(split0(outputs[i] or "")) do
       local rel = checkout.prefix .. path
       if self.file_set[rel] then
         found[#found + 1] = rel
@@ -532,7 +748,8 @@ function Index:grep(pattern)
     end)
     local regex = vim.regex("\\v" .. translated)
     for _, rel in ipairs(unlisted) do
-      for _, line in ipairs(vim.fn.readfile(self:abs(rel))) do
+      deadline.check()
+      for _, line in ipairs(wanted[extension(rel)] and vim.fn.readfile(self:abs(rel)) or {}) do
         if regex:match_str(line) then
           found[#found + 1] = rel
           break
@@ -543,7 +760,7 @@ function Index:grep(pattern)
   if self.workspace then
     table.sort(found)
   end
-  self.grep_cache[pattern] = found
+  self.grep_cache[key] = found
   return found
 end
 
@@ -559,6 +776,9 @@ function Index:type(qname, language)
   local rel = self.type_files[id]
   if rel then
     return self.symbols[id]
+  end
+  if self.type_misses[qname] then
+    return nil
   end
   local segments = vim.split(qname, ".", { plain = true })
   for k = #segments, 1, -1 do
@@ -576,16 +796,21 @@ function Index:type(qname, language)
   if self.type_files[id] then
     return self.symbols[id]
   end
+  self.type_misses[qname] = true
 end
 
 -- Every project type with this simple name.
 function Index:declarations_named(name, language)
+  local misses = self.name_misses[name]
+  if misses and misses[language or ""] then
+    return {}
+  end
   local pattern = "\\b(class|interface|enum|record)\\s+" .. name .. "\\b"
   -- TypeScript and JavaScript also declare types as `type X = {…}` and `const X = {…}`
-  if self.by_ext[".ts"] then
+  if language ~= "java" and self.by_ext[".ts"] then
     pattern = "\\b(class|interface|enum|record|type|const|let|var)\\s+" .. name .. "\\b"
   end
-  for _, file in ipairs(self:grep(pattern)) do
+  for _, file in ipairs(self:grep(pattern, language)) do
     if not language or self:backend(file).name == language then
       self:facts(file)
     end
@@ -602,6 +827,10 @@ function Index:declarations_named(name, language)
   table.sort(out, function(a, b)
     return a.id < b.id
   end)
+  if #out == 0 then
+    self.name_misses[name] = self.name_misses[name] or {}
+    self.name_misses[name][language or ""] = true
+  end
   return out
 end
 

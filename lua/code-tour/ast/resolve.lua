@@ -5,6 +5,7 @@
 -- declared types, in this file or another; INFERRED when any step was heuristic (a unique
 -- project name, dispatch); AMBIGUOUS when several candidates are kept. A call is never bound
 -- by its bare name: without a receiver type it stays unresolved.
+local deadline = require("code-tour.ast.deadline")
 local M = {}
 
 local STOPLIST = {}
@@ -1022,6 +1023,8 @@ function R:resolve_file(rel)
     local project_sites = 0
     for _, site in ipairs(body.sites) do
       local ok, err = pcall(self.resolve_site, self, site, ctx)
+      -- a deadline must not be recorded as a fact about this call
+      deadline.check()
       if not ok then
         site.unresolved, site.error = "dynamic", tostring(err)
       end

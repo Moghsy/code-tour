@@ -1030,9 +1030,10 @@ local function ast_ctx()
   return { token = s.id, cli = cli_path(), servername = vim.v.servername, root = s.root }
 end
 
+local ast_refresh
+
 -- Test examples are optional children of the symbol's overview. They have no call badge.
-local function ast_examples(live, data)
-  if not require("code-tour.ast").options.examples.tests then return end
+local function ast_attach_examples(live, data)
   local examples = require("code-tour.ast.examples")
   local extra, offered = {}, {}
   for _, stop in ipairs(data) do
@@ -1056,9 +1057,32 @@ local function ast_examples(live, data)
   vim.list_extend(data, extra)
 end
 
+-- Finding the tests means resolving every one of them, so the first time it happens in the
+-- background: the tour is shown at once and the examples join it when they are ready.
+local function ast_examples(live, data)
+  if not require("code-tour.ast").options.examples.tests then return end
+  local examples = require("code-tour.ast.examples")
+  if examples.ready(live.idx) then
+    return ast_attach_examples(live, data)
+  end
+  if live.examples_job and live.examples_job == live.idx.example_job then return end
+  live.examples_job = examples.prepare(live.idx, function() return s.ast == live end, function()
+    live.examples_job = nil
+    ast_attach_examples(live, s.stops)
+    ast_refresh()
+    if not typing() then render(false) end
+  end)
+end
+
+local function no_example()
+  local live = s.ast
+  return live and live.examples_job and live.examples_job == live.idx.example_job
+    and "Test examples are still being collected" or nil
+end
+
 -- Refresh every AST box from the live tour: notes, gists, writing marks and Q&A
 -- threads. Boxes re-render in place; the reader is never moved (§9.4).
-local function ast_refresh()
+function ast_refresh()
   local live = s.ast
   if not live then
     return
@@ -1319,6 +1343,9 @@ function M.ast_tour(request)
     if fallback then return { fallback = true, reason = fallback } end
     error(err, 0)
   end
+  local deadline = require("code-tour.ast.deadline")
+  deadline.check() -- do not replace the reader's tour for a caller that gave up
+  deadline.finish()
   local result = M.show(live:stops(), { root = live.root, origin = request.origin, cli = request.cli,
     standalone = request.standalone })
   s.ast = live
@@ -1470,6 +1497,7 @@ local function ast_reproject(live, data, here, label, reason)
 end
 
 function M.ast_detail(detail)
+  require("code-tour.ast.deadline").finish() -- a detail change edits the live tour in place
   local live = assert(s.ast, "Open an AST tour first (code-tour ast)")
   assert(ast_guard())
   local here, before = ast_here(), live.detail
@@ -1500,9 +1528,11 @@ function M.ast_adjust(ops)
   local recipe = vim.deepcopy(live.recipe)
   recipe.overrides = vim.list_extend(recipe.overrides or {}, normalized)
   recipe.detail = ops.detail or live.detail
-  local request = { root = live.root, recipe = recipe, store = live.store, cache_dir = live.idx.cache_dir }
+  local request = { root = live.root, recipe = recipe, store = live.store, cache_dir = live.idx.cache_dir,
+    cwd = ops.cwd }
   local rebuilt, reason = require("code-tour.ast.live").new(request)
   assert(rebuilt, reason)
+  require("code-tour.ast.deadline").finish()
   -- Preserve snippet IDs previously sent to a writer.
   rebuilt.ids, rebuilt.next_n = vim.deepcopy(live.ids), live.next_n
   rebuilt.snippets, rebuilt.built = {}, {}
@@ -1742,7 +1772,7 @@ end
 function M.ast_record()
   local live = assert(s.ast, "Open an AST tour first")
   local stop = current()
-  assert(stop and stop.test_example, "This snippet has no matching project test")
+  assert(stop and stop.test_example, no_example() or "This snippet has no matching project test")
   local input = require("code-tour.ast.examples").tests(live.idx, { live.snippets[stop.anchor].symbol })[1]
   require("code-tour.ast.recordings").start(live, input, {}, function(record, err)
     if not record then
@@ -2697,7 +2727,7 @@ function M.setup(opts)
   end, { force = true })
   vim.api.nvim_create_user_command("CodeTourExample", function()
     local stop = current()
-    if stop and stop.test_example then M.expand_call(stop.test_example) else notify("No test example") end
+    if stop and stop.test_example then M.expand_call(stop.test_example) else notify(no_example() or "No test example") end
   end, { force = true })
   vim.api.nvim_create_user_command("CodeTourDetail", function(args)
     local ok, err = pcall(M.ast_detail, args.args)

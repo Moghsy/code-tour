@@ -123,7 +123,8 @@ function M.new(request)
   if #entries == 0 and not auto and #overrides == 0 then
     return nil, "no entry"
   end
-  local idx = ast.index({ root = request.root, cache_dir = request.cache_dir })
+  local idx = ast.cached_index({ root = request.root, cache_dir = request.cache_dir })
+  idx.cwd = request.cwd
   local current_entries, current_through, ops, missing = entries, through, overrides, {}
   if request.recipe then
     current_entries, current_through, ops, missing = reopen(idx, saved, entries, through, overrides)

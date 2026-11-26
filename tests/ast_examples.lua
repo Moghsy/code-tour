@@ -52,6 +52,8 @@ t.finish("AST examples", function()
   tour.ast_tour({ entries = { "OrderService#checkout" }, overrides = t.route(), root = root, cache_dir = t.cache })
   local state = tour.state()
   local stop = state.stops[1]
+  t.check(not stop.test_example, "The tour is shown before the tests are searched")
+  t.check(vim.wait(10000, function() return stop.test_example ~= nil end), "Examples join the tour afterwards")
   t.eq(stop.test_example._parent_stop, stop, "Example links to its overview")
   t.check(not stop.test_example.next, "Test example stays off the main flow")
   tour.expand_call(stop.test_example)

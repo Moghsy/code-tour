@@ -3,8 +3,8 @@ local M = {}
 local function read(idx, file)
   -- unsaved edits win; otherwise the disk, as the note store reads it (a loaded but
   -- unmodified buffer may not have been reloaded since the file changed)
-  local buf = vim.fn.bufnr(idx:abs(file))
-  local loaded = buf > 0 and vim.api.nvim_buf_is_loaded(buf)
+  local buf = require("code-tour.ast.index").buffer(idx:abs(file))
+  local loaded = buf ~= nil
   if loaded and vim.bo[buf].modified then
     return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   end

@@ -246,7 +246,7 @@ end
 -- a cached blob when the working tree changes from another process.
 function Store:file_state(file)
   local path = self.idx:abs(file)
-  local buf = vim.fn.bufnr(path)
+  local buf = require("code-tour.ast.index").buffer(path) or -1
   local modified = buf > 0 and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified
   local signature = modified and ("buf:%d:%d"):format(buf, vim.api.nvim_buf_get_changedtick(buf))
     or stamp(uv.fs_stat(path))

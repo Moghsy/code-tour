@@ -161,7 +161,18 @@ def editor_error(error):
     return re.sub(r'^(?:\[string "[^"]*"\]|\S+\.lua):\d+: ', '', message).strip()
 
 
+def bounded(code, seconds):
+    """Run `code` under an editor-side deadline: an editor still working cannot be told to stop."""
+    return ('local ok,deadline=pcall(require,"code-tour.ast.deadline")\n'
+            f'local function body(...)\n{code}\nend\n'
+            f'if ok then return deadline.run({seconds},body,...) end\n'
+            'return body(...)')
+
+
 def rpc(address, code, args=(), timeout=3):
+    if timeout >= 15:
+        # give up in the editor first, so its message is what the caller reads
+        code = bounded(code, timeout * 0.9)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(timeout)
         stream.connect(address)
@@ -723,7 +734,7 @@ def ast_main(argv):
         if len(stale) > args.limit:
             print(f'{len(stale)} stale symbols; taking the first {args.limit} (callee first), run again for the rest', file=sys.stderr)
         args.entries = args.entries + stale[:args.limit]
-    request = dict(entries=args.entries, root=str(root), through=args.through)
+    request = dict(entries=args.entries, root=str(root), through=args.through, cwd=os.getcwd())
     if args.auto:
         request['auto'] = True
     if args.overrides:
@@ -855,6 +866,7 @@ def adjust_main(argv):
     if target is None:
         raise RuntimeError('No matching editor; supply the --pane from the outline')
     opts = {key: value for key, value in dict(detail=args.detail, overrides=args.overrides).items() if value is not None}
+    opts['cwd'] = os.getcwd()
     result = deliver(target, 'ast_adjust', [opts], args.tour, timeout=60)
     print(json.dumps(result) if args.json else result['outline'])
     return 0
@@ -977,7 +989,7 @@ def knowledge_main(command, argv):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
         if git.returncode == 0:
             root = Path(git.stdout.strip()).resolve()
-    req = dict(root=str(root), symbol=getattr(args, 'symbol', None), target=getattr(args, 'target', None),
+    req = dict(root=str(root), cwd=os.getcwd(), symbol=getattr(args, 'symbol', None), target=getattr(args, 'target', None),
                query=getattr(args, 'query', None), through=args.through, detail=args.detail, model=args.model,
                budget=args.budget, overrides=getattr(args, 'overrides', None))
     req = {k: v for k, v in req.items() if v is not None}

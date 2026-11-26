@@ -25,7 +25,17 @@ M.defaults = {
 }
 M.options = vim.deepcopy(M.defaults)
 
+local deadline = require("code-tour.ast.deadline")
+local indexes = {} -- the last index built for each project and configuration
+deadline.on_expire(function()
+  for _, idx in pairs(indexes) do
+    idx:reset()
+  end
+  indexes = {}
+end)
+
 function M.setup(opts)
+  indexes = {}
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
 end
 
@@ -113,6 +123,23 @@ function M.index(opts)
   return idx
 end
 
+-- The index of an earlier tour when nothing it was built from changed, so parsing,
+-- resolution and the test catalog are not redone. Listing the files is the only cost.
+function M.cached_index(opts)
+  local fresh = M.index(opts)
+  local key = vim.inspect({ fresh.root, (opts or {}).languages or M.options.languages, fresh.ignore,
+    fresh.max_files, fresh.cache_dir, M.options.boundaries, M.options.synthesizers })
+  local signature = fresh:signature()
+  local old = indexes[key]
+  if old and old.signature == signature and old:buffers_current() then
+    old.heads = nil -- a commit moves HEAD without touching a file
+    return old
+  end
+  fresh.signature = signature
+  indexes[key] = fresh
+  return fresh
+end
+
 -- opts: { root?, out?, cache_dir? } -> { path, nodes, links, files, truncated? }
 -- Agent-authored concepts (the semantic layer): action = "add" | "list" | "remove".
 function M.concepts(opts)
@@ -136,8 +163,8 @@ local function manifest_of(idx)
   local files = {}
   for _, rel in ipairs(idx.files) do
     -- an unsaved buffer is part of the project state, so it is part of the identity
-    local buf = vim.fn.bufnr(idx:abs(rel))
-    if buf > 0 and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].modified then
+    local buf = require("code-tour.ast.index").buffer(idx:abs(rel))
+    if buf and vim.bo[buf].modified then
       files[rel] = "buffer:" .. vim.fn.sha256(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
     else
       files[rel] = idx:blob(rel)
@@ -322,7 +349,8 @@ function M.outline(entries, opts)
   if type(entries) == "string" then
     entries = { entries }
   end
-  local idx = M.index({ root = opts.root, cache_dir = opts.cache_dir })
+  local idx = M.cached_index({ root = opts.root, cache_dir = opts.cache_dir })
+  idx.cwd = opts.cwd
   if opts.auto and (not entries or #entries == 0) then
     return { root = idx.root, auto = true, candidates = require("code-tour.ast.outline").auto_entries(idx), truncated = idx.truncated or nil }
   end

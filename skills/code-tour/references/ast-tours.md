@@ -67,6 +67,8 @@ A route that names a call by symbol applies to every call site of that callee in
 
 ## Jumps and code outside the AST
 
+The graph shows calls only, so configuration, registrations and name-based dispatch that explain the flow must be found by reading and added here, in the first tour. A key press reaching a function, for example, needs the default bindings and the command table beside the calls.
+
 A route edge is a call unless it says `"kind": "jump"`. A jump goes where the code does not call: the interface or type that defines an API, a route table, a config file, a client in another repository. It never replaces a real call's target, so do not use `--edge` for this.
 
 ```json

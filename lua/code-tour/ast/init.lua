@@ -29,6 +29,30 @@ function M.setup(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
 end
 
+-- Headless CLI runs skip the user's config, so the editor leaves its language list where
+-- they can read it.
+local function languages_file()
+  return vim.fn.stdpath("data") .. "/code-tour/ast-languages.json"
+end
+
+function M.remember_languages()
+  local file = languages_file()
+  vim.fn.mkdir(vim.fs.dirname(file), "p")
+  vim.fn.writefile({ vim.json.encode(M.options.languages) }, file)
+end
+
+-- The list the editor last used, or nil.
+function M.remembered_languages()
+  local file = languages_file()
+  if vim.fn.filereadable(file) == 0 then
+    return
+  end
+  local ok, list = pcall(vim.json.decode, table.concat(vim.fn.readfile(file), "\n"))
+  if ok and vim.islist(list) and #list > 0 then
+    return list
+  end
+end
+
 local function backend_for(path, languages)
   local ext = path:match("(%.[^./]+)$")
   for _, name in ipairs(languages or M.options.languages) do

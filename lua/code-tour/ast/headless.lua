@@ -8,9 +8,12 @@ if vim.env.CODE_TOUR_PARSER_RUNTIME then
   vim.opt.rtp:append(vim.env.CODE_TOUR_PARSER_RUNTIME)
 end
 
--- Headless Neovim skips the user's init, so allow a language list for CLI jobs.
-if vim.env.CODE_TOUR_AST_LANGUAGES then
-  local languages = vim.split(vim.env.CODE_TOUR_AST_LANGUAGES, "[,%s]+", { trimempty = true })
+-- Headless Neovim skips the user's init. The language list is CODE_TOUR_AST_LANGUAGES for
+-- CLI jobs, else the one the editor last used, else the default.
+local languages = vim.env.CODE_TOUR_AST_LANGUAGES
+    and vim.split(vim.env.CODE_TOUR_AST_LANGUAGES, "[,%s]+", { trimempty = true })
+  or require("code-tour.ast").remembered_languages()
+if languages then
   require("code-tour.ast").setup({ languages = languages })
 end
 
@@ -21,7 +24,7 @@ if vim.env.CODE_TOUR_CONFIG and vim.env.CODE_TOUR_CONFIG ~= "" then
     local config = assert(loadfile(vim.fn.expand(vim.env.CODE_TOUR_CONFIG)))()
     assert(type(config) == "table", "CODE_TOUR_CONFIG must return a table")
     if config.ast then
-      require("code-tour.ast").setup(config.ast)
+      require("code-tour.ast").setup(vim.tbl_extend("force", { languages = languages }, config.ast))
     end
     require("code-tour.workspace").setup(config.workspace)
   end)

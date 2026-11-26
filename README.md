@@ -80,6 +80,8 @@ The commands, tour format and saved tours are also in [SPEC-old.md](SPEC-old.md)
 
 AST tours use Neovim's Tree-sitter parsers. Java is enabled by default. Enable Python and TypeScript/JavaScript in Neovim with `ast = { languages = { "java", "python", "typescript" } }` in the plugin setup (`javascript` is another name for `typescript`: one backend serves both). TypeScript and JavaScript need the `typescript` and `tsx` parsers, and their symbols are named by file path, such as `typescript:src.orders.service.OrderService.place`. Use a symbol or a source position to start a tour, or list candidate entry points with `--auto`.
 
+Headless commands (`--dry-run`, `codegraph`, `search`) use the languages your editor was last started with; `CODE_TOUR_AST_LANGUAGES` overrides them.
+
 ```sh
 code-tour ast 'OrderService#checkout' --detail normal
 CODE_TOUR_AST_LANGUAGES=java,python code-tour ast python:shop.order.checkout --dry-run

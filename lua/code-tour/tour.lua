@@ -2582,6 +2582,19 @@ function M.setup(opts)
   end
   assert(type(s.opts.saved_reuse_unverified) == "boolean", "saved_reuse_unverified must be a boolean")
   require("code-tour.ast").setup(s.opts.ast)
+  -- only an editor someone is looking at speaks for the user; scripts and tests have no UI
+  local function remember()
+    pcall(require("code-tour.ast").remember_languages)
+  end
+  if #vim.api.nvim_list_uis() > 0 then
+    remember()
+  else
+    vim.api.nvim_create_autocmd("UIEnter", {
+      group = vim.api.nvim_create_augroup("CodeTourLanguages", { clear = true }),
+      once = true,
+      callback = remember,
+    })
+  end
   require("code-tour.workspace").setup(s.opts.workspace)
   require("code-tour.instance").register()
   highlights()

@@ -8,7 +8,7 @@ local M = {
   name = "java",
   extensions = { ".java" },
   parser = "java",
-  version = 11, -- bump when the shape of extracted facts changes (invalidates the cache)
+  version = 12, -- bump when the shape of extracted facts changes (invalidates the cache)
 }
 
 M.types = {
@@ -166,7 +166,7 @@ M.type_ref = function(n, src)
 end
 
 local function modifiers(ctx, n)
-  local mods, annotations, args = {}, {}, {}
+  local mods, annotations, args, spans = {}, {}, {}, {}
   local m = child_of_type(n, "modifiers")
   if m then
     for c in m:iter_children() do
@@ -179,12 +179,13 @@ local function modifiers(ctx, n)
         if list then
           args[text:match("([^.]+)$")] = ctx.text(list) -- "(toBuilder = true)", read by synth rules
         end
+        spans[text:match("([^.]+)$")] = range(c) -- where a generated member comes from
       elseif not c:named() then
         mods[ctx.text(c)] = true
       end
     end
   end
-  return mods, annotations, args
+  return mods, annotations, args, spans
 end
 
 local function type_parameters(ctx, n)
@@ -451,6 +452,15 @@ function M.declarations(file, root, src)
         end
       end
     end
+    -- A generated member points at what generated it: the field an accessor is for, else the
+    -- annotation, never the whole type (a type-sized snippet would enclose the type's own methods).
+    local function origin(holder, spec)
+      local f = spec.field and holder.fields[spec.field] and facts.symbols[holder.fields[spec.field]]
+      if f and f.range and not f.implicit then
+        return f.range
+      end
+      return (owner.annotation_ranges or {})[spec.rule] or holder.range
+    end
     local function member(holder, spec)
       local keys = {}
       for i, p in ipairs(spec.params or {}) do
@@ -460,12 +470,13 @@ function M.declarations(file, root, src)
       if facts.symbols[id] then
         return
       end
+      local at = origin(holder, spec)
       local params = {}
       for _, p in ipairs(spec.params or {}) do
-        params[#params + 1] = { name = p.name, type = p.type, range = holder.range }
+        params[#params + 1] = { name = p.name, type = p.type, range = at }
       end
       declare({ id = id, kind = spec.kind, name = spec.name, label = holder.name .. "." .. spec.name .. "(" .. table.concat(keys, ", ") .. ")",
-        file = file, range = holder.range, owner = holder.id, params = params, varargs = false,
+        file = file, range = at, owner = holder.id, params = params, varargs = false,
         returns = spec.returns ~= "@self" and spec.returns or nil,
         returns_spelled = spec.returns ~= "@self" and spec.returns or nil, self_return = spec.returns == "@self" or nil,
         modifiers = {}, annotations = {},
@@ -479,7 +490,7 @@ function M.declarations(file, root, src)
         local id = owner.id .. "#" .. spec.name
         if not facts.symbols[id] then
           declare({ id = id, kind = "field", name = spec.name, label = owner.name .. "." .. spec.name, file = file,
-            range = owner.range, owner = owner.id, type = spec.type, static = spec.static == true, implicit = true,
+            range = origin(owner, spec), owner = owner.id, type = spec.type, static = spec.static == true, implicit = true,
             synthetic = spec.rule, source = "ast" })
           owner.fields[spec.name] = id
         end
@@ -518,7 +529,7 @@ function M.declarations(file, root, src)
       qname = outer.qname .. "$" .. opts.local_index .. name
     end
     local kind = type_kinds[n:type()]
-    local mods, annotations, annotation_args = modifiers(ctx, n)
+    local mods, annotations, annotation_args, annotation_ranges = modifiers(ctx, n)
     local sym = {
       id = "java:" .. qname,
       kind = kind,
@@ -538,6 +549,7 @@ function M.declarations(file, root, src)
       modifiers = mods,
       annotations = annotations,
       annotation_args = annotation_args,
+      annotation_ranges = annotation_ranges,
       abstract = mods.abstract == true or kind == "interface",
       error = n:has_error(),
       ["local"] = opts.local_index and true or nil,

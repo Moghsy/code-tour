@@ -33,6 +33,8 @@ function M.auto_entries(idx)
       local path = sym.file or ""
       local is_test = sym.test == true or path:match("^tests?/") ~= nil or path:match("/tests?/") ~= nil
         or path:match("Test[^/]*%.java$") ~= nil or name:match("^test_") ~= nil
+        or path:match("%.test%.[mc]?[tj]sx?$") ~= nil or path:match("%.spec%.[mc]?[tj]sx?$") ~= nil
+        or path:match("__tests__/") ~= nil
       if not is_test then
       local score = 0
       local public_entry = false
@@ -115,13 +117,11 @@ function M.prepare(idx, specs, opts)
   -- the agent's route shapes the first projection too, so its short ids (n1.s2, n1.r6) match
   -- the ones the agent saw; the full apply below repeats it and reports any problems
   require("code-tour.ast.overrides").route(rt, opts.overrides, {})
-  local only_adds = opts.overrides and #opts.overrides > 0
-  if only_adds then
-    for _, op in ipairs(opts.overrides) do
-      if op.kind ~= "add" then only_adds = false; break end
-    end
-  end
-  if #entries == 0 and not only_adds then return nil, "no entry" end
+  -- an added range without a site is an entry: register it now, so the first projection has
+  -- its snippet and the agent's short ids for it (n1.s1) can be read like any other (§14)
+  local err = require("code-tour.ast.overrides").add_entries(rt, opts.overrides, entries)
+  if err then return nil, err end
+  if #entries == 0 then return nil, "no entry" end
   local through = {}
   for _, spec in ipairs(opts.through or {}) do
     local ids, err = rt:resolve_entry(spec)
@@ -362,7 +362,9 @@ local function site_item(s, owners)
   elseif s.built and s.target_label then
     notes[#notes + 1] = "constructed: " .. s.target_label
   end
-  if s.via == "boundary" then
+  if s.kind == "jump" then
+    notes[#notes + 1] = "jump" .. (s.target_label and (": " .. s.target_label) or "")
+  elseif s.via == "boundary" then
     notes[#notes + 1] = "via configured boundary"
   elseif s.via == "through" then
     notes[#notes + 1] = "--through"

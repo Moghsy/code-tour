@@ -1,0 +1,4 @@
+{
+  // path aliases are resolved by the backend
+  "compilerOptions": { "baseUrl": ".", "paths": { "@lib/*": ["src/lib/*"] } },
+}

@@ -1,6 +1,6 @@
 # Code representation and AST-backed tours
 
-This spec describes the AST-backed tour, persistent note store, agent commands, Java examples and opt-in Python backend. Library source navigation, AST route confirmation by LSP, and additional walk types are deferred.
+This spec describes the AST-backed tour, persistent note store, agent commands, Java examples and opt-in Python and TypeScript/JavaScript backends. Library source navigation, AST route confirmation by LSP, and additional walk types are deferred.
 
 The plugin derives the regions, call sites and route for supported source. The agent writes explanations addressed by short IDs such as `n1 r2`. The repository store retains each explanation while its source and walked callees still match the saved evidence. For source without a suitable parser, an agent can supply the ranges (§14).
 
@@ -285,6 +285,8 @@ Everything from regions upward (the route, the store, the agent protocol, the ed
 
 Python is the second backend. It resolves module-qualified symbols such as `python:checkout.pipeline.handle`, relative imports, re-exports, and calls on receivers inferred from assignments and constructors. Calls that cannot be bound statically may use name-only inference or remain unresolved. Python recognizes `__main__` guards and common route decorators as entry candidates and discovers pytest-style tests. Test discovery is available for Python. Debugger recording currently uses the Java adapter.
 
+TypeScript and JavaScript share a third backend (`typescript`, also enabled as `javascript`), so that imports cross between them. `.ts`, `.mts` and `.cts` files use the `typescript` parser; `.tsx`, `.jsx`, `.js`, `.mjs` and `.cjs` use `tsx`. Symbols are named by module path (`typescript:src.orders.service.OrderService.place`). It resolves relative imports, `index` files, re-exports, CommonJS `require` and `module.exports`, and the `paths` and `baseUrl` of the project root's `tsconfig.json` or `jsconfig.json`; receivers are typed by annotations, constructor parameter properties and `new`; a call on an interface or abstract method dispatches to the implementations of its subtypes. Destructured parameters and values are typed from their annotation or source, and locals are scoped by block. A name that nothing in a file binds resolves, as `INFERRED`, to the one script (a file with no `import` or `export`) that declares it at top level, or to the one file that publishes it on `globalThis`. Objects with function members (`const Hints = { activate() {} }`) are entries as `Hints.activate`. Entry candidates are top-level code, Express-style route handlers and NestJS method decorators. Not covered: nested or `extends`-inherited tsconfig files, workspace package names (treated as libraries), structural implementations without `implements`, test discovery for anonymous Jest/Vitest callbacks, and debugger recording.
+
 Java is enabled by default. Enable Python in Neovim with `ast = { languages = { "java", "python" } }` in plugin setup. Headless CLI commands use `CODE_TOUR_AST_LANGUAGES=java,python` to select both backends. Use `CODE_TOUR_PARSER_RUNTIME` to add a Neovim runtime directory containing the parsers.
 
 ## 5. Resolution
@@ -460,6 +462,22 @@ The plugin still reports **facts** about the code the route walks:
 - **Gaps.** A routed call the code cannot follow: unresolved, abstract with no implementation, several implementations without a named one or a known construction (§8.5), or a **hand-off** (`backend.handoffs`, such as an executor or event publisher). The outline lists each (`gap: s3 bus.publish — target unknown`), the header counts them, and an agent edge (`--edge`, §9.6) or a configured boundary (`ast.boundaries`) closes one.
 
 A tour without a route shows only its entry; every call is lazy until the agent names it.
+
+#### 8.3.1 Jumps: edges the code does not call
+
+Some places the reader must see are not called from where the story is: where an API is defined, the interface a controller implements, the route table that maps a URL to it, a client in another repository that calls it. A **jump** is a route edge with `"kind": "jump"`:
+
+```json
+[{"from": "OrderController#postOrder", "to": "PaymentGateway", "kind": "jump", "at": "@PostMapping", "level": 0},
+ {"from": "OrderService#checkout", "to": {"file": "/work/web/src/api.ts", "start": 12, "end": 30}, "kind": "jump", "level": 1}]
+```
+
+- `from` is the box the jump leaves from, `to` where it goes. Either end is a symbol spec (§8.1) or a source range `{"file", "start", "end", "label"?, "regions"?}` in any language, including a file in another repository (§14). A type spec as `to` jumps to the type's declaration. A range end makes `"kind": "jump"` the default.
+- `at` is the text the jump hangs from inside `from` (its first occurrence; `"line": N` picks one line). Without `at` it hangs from the first line of `from`. The anchor decides the box that offers the jump, and where the walk takes it: in evaluation order, before the first call written after the anchor.
+- `level` works as for calls: 0 is walked, 1 to 5 are optional by detail, and an unnamed jump does not exist.
+- A jump is a **site of its own** (`kind: "jump"`, `via: "jump"`), numbered after the method's calls, so the ids of the real calls never change. It does not split or merge regions, because it is an aside, not code that runs. A jump never replaces the target of a real call; use `--edge` (§9.6) for a call the code cannot follow.
+- The outline marks it `(jump)`. The editor draws it like a call badge, with `jump = true` on the projected call, and `ad`, `ao` and the walk treat it like a call.
+- A range target is an agent snippet (§14): its notes live in the note store, are found again by fingerprint when lines move, and go stale when its code changes. The range is fingerprinted when the route is first applied and that fingerprint is stored in the recipe, so a reopened tour relocates the range, or warns `agent range changed`, rather than showing whatever the lines now hold.
 
 ### 8.4 Complexity
 
@@ -798,7 +816,8 @@ When a symbol has no backend or parser, pass a JSON range via `code-tour ast --a
 ```
 
 - Agent regions are addressed by file and fingerprint, and their notes go into the note store like any other. Lookup relocates them by fingerprint when lines move.
-- A tour can contain only `--add` entries. The existing stop-based authoring workflow also supports wholly agent-authored tours and exports agent provenance for their boxes.
+- A tour can contain only `--add` entries, and it can be adjusted (`--rate`, `--split`, routes) like any other: an added entry is registered before the first projection, so its ids (`n1.s1`) exist when overrides are read. The existing stop-based authoring workflow also supports wholly agent-authored tours and exports agent provenance for their boxes.
+- **Another repository.** The file may lie outside the project, given as an absolute path or relative to it (`../web/src/api.ts`). Its git checkout (or, outside git, its directory) joins the index as an extra repository under the reserved directory `@NAME` (the checkout's directory name, made unique), as workspace repositories do (SPEC-workspace), so its paths read `@web/src/api.ts` in outlines and note addresses. The checkout's root is stored with the range, so a reopened tour finds it again. Its notes are kept in this project's store, beside the tour that uses them, and freshness uses that checkout's own git state. Nothing in the other repository is written. To get AST symbols, not just ranges, from several repositories, configure a workspace.
 - An agent-supplied snippet has no sites of its own unless the agent lists them (`"sites": [{"text": "client.post", "line": 14, "target": "…"}]`).
 
 ## 15. The project graph, analysis and concepts
@@ -869,6 +888,7 @@ The Java fixture covers a multi-package checkout flow, interfaces with one or se
 Run the Neovim scripts individually. `tests/ast_common.lua` is a helper. The AST scripts load parsers from `CODE_TOUR_PARSER_RUNTIME` or the local Neovim site directory and report missing parsers. Editor integration tests use local Neovim RPC sockets.
 
 ```sh
+nvim --clean --headless -l tests/ast_jumps.lua      # jumps, ranges in other repositories, added entries (§8.3.1, §14)
 export XDG_STATE_HOME="$(mktemp -d)"
 export NVIM_LOG_FILE="$XDG_STATE_HOME/nvim.log"
 for test in tests/*.lua; do

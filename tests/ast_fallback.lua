@@ -8,6 +8,20 @@ t.finish("AST fallback", function()
   vim.fn.writefile(lines, root .. "/" .. file)
   local unavailable = ast.outline({ file .. ":2" }, { root = root })
   t.check(unavailable.fallback and unavailable.reason:find("no backend", 1, true), "Unsupported source returns fallback")
+  t.check(unavailable.reason:find("AST languages enabled: java", 1, true), "A fallback names the enabled languages")
+
+  -- a symbol in a project with no file in an enabled language is a fallback, not a typo
+  local js = vim.fn.tempname()
+  vim.fn.mkdir(js, "p")
+  vim.fn.writefile({ "function handleKey(event) { return event.key; }" }, js .. "/keys.js")
+  t.run({ "git", "init", "-q" }, js)
+  t.run({ "git", "add", "-A" }, js)
+  local by_symbol = ast.outline({ "Keys#handleKey" }, { root = js })
+  t.check(by_symbol.fallback and by_symbol.reason:find("no source file in an enabled AST language", 1, true),
+    "An unknown symbol in an unsupported project returns fallback")
+  t.check(by_symbol.reason:find("CODE_TOUR_AST_LANGUAGES", 1, true), "and says how to enable Python")
+  t.check(not pcall(ast.outline, { "Nowhere#nothing" }, { root = root }),
+    "an unknown symbol in a supported project stays an error")
   local added = {
     kind = "add",
     value = vim.json.encode({ file = file, start = 1, ["end"] = 3,

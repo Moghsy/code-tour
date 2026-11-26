@@ -24,6 +24,12 @@ t.finish("ast analysis", function()
     size = size + c.size
   end
   eq(size, vim.tbl_count(seen), "sizes add up to the members")
+  for _, c in ipairs(first.communities) do
+    for _, p in ipairs(c.packages) do
+      check(not p:find("^main%.java") and not p:find("^src%."),
+        "a Java type's package is its declared package, not its file path: " .. p)
+    end
+  end
   eq(view("communities").cached, true, "second request reads the cache")
   local again = view("communities", { members = true })
   eq(again.communities, first.communities, "clustering is deterministic")

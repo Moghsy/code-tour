@@ -15,7 +15,8 @@
 -- Extra keys the editor reads back (normalize keeps every key not starting with "_"):
 --   ast = true on every projected stop; anchor; address (the box's region address); gist (when a fresh gist exists);
 --   writing = true on a box still to be written; level_shown = the level of a body shown
---   from one level away (§11.2); site/target on calls; gaps = {{callsite, text, reason}}
+--   from one level away (§11.2); site/target on calls; jump = true on a call that is a
+--   jump, not a call the code makes (§8.3.1); gaps = {{callsite, text, reason}}
 --   on the box holding a main-flow gap (§10).
 local M = {}
 
@@ -54,6 +55,14 @@ function M.box_note(found)
   return out
 end
 
+-- The path the editor opens: index paths are relative to the root, except a file in a
+-- checkout attached for an agent range (`@web/src/api.ts`, §14), which is not under it.
+local function editor_file(idx, file)
+  local repo = file and idx and idx.repo_of and idx:repo_of(file)
+  return repo and repo.attached and idx:abs(file) or file
+end
+M.editor_file = editor_file
+
 local function assign(box, pres)
   box.note, box.gist, box.writing, box.level_shown = pres.note, pres.gist, pres.writing, pres.level_shown
   box.example = pres.example
@@ -66,7 +75,7 @@ end
 --   live.idx               the project index (target symbols for lazy calls)
 function M.snippet(live, sn)
   local stop = {
-    file = sn.file,
+    file = editor_file(live.idx, sn.file),
     start = sn.lines[1],
     ["end"] = sn.lines[2],
     title = sn.label,
@@ -132,6 +141,7 @@ function M.call(live, sn, site)
     call.callsite = callsite
     call.site, call.target = site.site, site.target
     call.caller = sn.n
+    call.jump = site.kind == "jump" or nil
     call.level = site.effective
     if site.mode == "walk" then
       call.next = true
@@ -149,6 +159,7 @@ function M.call(live, sn, site)
       call.callsite = callsite
       call.site, call.target = site.site, site.target
       call.caller = sn.n
+      call.jump = site.kind == "jump" or nil
       call.why, call.level = site.why, site.effective
       return call
     end
@@ -158,7 +169,7 @@ function M.call(live, sn, site)
     end
     local first, last = require("code-tour.ast.outline").lines_of(sym.range)
     return {
-      file = sym.file,
+      file = editor_file(live.idx, sym.file),
       start = first,
       ["end"] = last,
       title = sym.label,
@@ -167,6 +178,7 @@ function M.call(live, sn, site)
       level = site.effective,
       why = site.why,
       ast = true,
+      jump = site.kind == "jump" or nil,
       anchor = key,
       site = site.site,
       target = site.target,

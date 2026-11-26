@@ -42,6 +42,123 @@ local function site_of(body, id)
 end
 M.site_of = site_of
 
+-- The sites in walk order: evaluation order, with jumps (§8.3.1) placed at their anchors.
+-- Ids stay array indexes, so jumps are numbered after the calls and only `order` moves them.
+local function ordered(body)
+  if not body.order then
+    return body.sites
+  end
+  local out = {}
+  for _, i in ipairs(body.order) do
+    out[#out + 1] = body.sites[i]
+  end
+  return out
+end
+M.ordered = ordered
+
+local function file_lines(idx, file)
+  local buf = vim.fn.bufnr(idx:abs(file))
+  local loaded = buf > 0 and vim.api.nvim_buf_is_loaded(buf)
+  if loaded and vim.bo[buf].modified then
+    return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  end
+  if vim.fn.filereadable(idx:abs(file)) == 1 then
+    return vim.fn.readfile(idx:abs(file))
+  end
+  return loaded and vim.api.nvim_buf_get_lines(buf, 0, -1, false) or {}
+end
+
+-- Where a jump hangs inside the symbol it leaves from: its `at` text (first occurrence, on
+-- `line` when given), else the symbol's name on its first line, else that line's first word.
+-- Returns { row, col, len } (0-based row and byte column) or nil and a reason.
+function R:jump_anchor(id, jump)
+  local sym = self.idx:symbol(id)
+  if not (sym and sym.range and sym.file) then
+    return nil, "no source for " .. tostring(id)
+  end
+  local lines = file_lines(self.idx, sym.file)
+  local a, b = sym.range.start[1], sym.range["end"][1]
+  if jump.line then
+    local row = tonumber(jump.line) - 1
+    if row < a or row > b then
+      return nil, ("line %s is outside %s"):format(jump.line, sym.label or id)
+    end
+    a, b = row, row
+  end
+  for row = a, b do
+    local line = lines[row + 1] or ""
+    local from = row == sym.range.start[1] and sym.range.start[2] + 1 or 1
+    if jump.at then
+      local col = line:find(jump.at, from, true)
+      if col then
+        return { row = row, col = col - 1, len = #jump.at }
+      end
+    else
+      local col = sym.name and line:find(sym.name, from, true)
+      if col then
+        return { row = row, col = col - 1, len = #sym.name }
+      end
+      local first, last = line:match("()%S+()", from)
+      if first then
+        return { row = row, col = first - 1, len = last - first }
+      end
+    end
+  end
+  if jump.at then
+    return nil, ("no %q in %s"):format(jump.at, sym.label or id)
+  end
+  return nil, "nothing to hang the jump from in " .. (sym.label or id)
+end
+
+local function before(a, b)
+  return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+end
+
+-- A body with the symbol's jumps as sites of their own (kind "jump", via "jump").
+function R:with_jumps(id, body)
+  local jumps = self.jumps and self.jumps[id]
+  if not (body and jumps and #jumps > 0) then
+    return body
+  end
+  self.jump_bodies = self.jump_bodies or {}
+  local hit = self.jump_bodies[id]
+  if hit and hit.base == body then
+    return hit.body
+  end
+  local out = vim.tbl_extend("force", body, { sites = vim.list_extend({}, body.sites) })
+  local order = {}
+  for i in ipairs(body.sites) do
+    order[i] = i
+  end
+  if body.order then
+    order = vim.list_extend({}, body.order)
+  end
+  for _, j in ipairs(jumps) do
+    if j.anchor then
+      local at = { j.anchor.row, j.anchor.col }
+      local text = j.at or j.label
+      local i = #out.sites + 1
+      out.sites[i] = { id = "s" .. i, name = text, text = text, kind = "jump", jump = true, at = at,
+        range = { start = at, ["end"] = { j.anchor.row, j.anchor.col + j.anchor.len } },
+        targets = { { symbol = j.to, confidence = "INFERRED", source = "agent", via = "jump" } },
+        rating_override = j.level }
+      -- walked before the first call written after the anchor
+      local k = #order + 1
+      for pos, idx in ipairs(order) do
+        local site = out.sites[idx]
+        if site.at and before(at, site.at) then
+          k = pos
+          break
+        end
+      end
+      table.insert(order, k, i)
+    end
+  end
+  out.order = order
+  self.jump_bodies[id] = { base = body, body = out }
+  return out
+end
+
 -- A lambda that is stored or returned runs later, not during this method.
 local function stored(s)
   return s.deferred ~= nil and s.deferred.call == nil
@@ -95,6 +212,7 @@ function R:body(id)
       self.edited_bodies[id] = body
     end
   end
+  body = self:with_jumps(id, body)
   local named = body and self.route and self.route[id]
   if named then
     -- the agent's route (caller -> callee, level): rate the sites that call a named callee
@@ -104,7 +222,7 @@ function R:body(id)
       routed = vim.tbl_extend("force", body, { sites = {} })
       for i, site in ipairs(body.sites) do
         local level
-        for _, t in ipairs(site.targets or {}) do
+        for _, t in ipairs(not site.jump and site.targets or {}) do
           local l = level_for(named[t.symbol], site)
           if l then
             level = level == nil and l or math.min(level, l)
@@ -553,7 +671,7 @@ function R:has_effect(id)
   if not result then
     local on = self:success(body).on
     for _, s in ipairs(body.sites) do
-      if on(s.at) and not stored(s) then
+      if on(s.at) and not stored(s) and not s.jump then -- a jump is an aside, not code that runs
         for _, t in ipairs(s.targets or {}) do
           if self:has_effect(t.symbol) then
             result = true
@@ -828,7 +946,7 @@ function R:main_flow(entries, marks)
     local function gap(s, reason)
       node.gaps[#node.gaps + 1] = { site = s.id, reason = reason }
     end
-    for _, s in ipairs(body.sites) do
+    for _, s in ipairs(ordered(body)) do
       local sink = library_call(s, backend.sinks)
       if sink then
         node.sinks[#node.sinks + 1] = { site = s.id, entry = sink }
@@ -902,7 +1020,7 @@ function R:tree(entries, flow)
     local mnode = node.main and flow.nodes[id] or nil
     if body then
       local reached = {}
-      for _, s in ipairs(body.sites) do
+      for _, s in ipairs(ordered(body)) do
         local ts, built = self:targets(s, body, sym, incoming)
         local ms = mnode and mnode.main_sites[s.id]
         if ms and ms.forced then

@@ -302,7 +302,7 @@ function Store:region_fingerprint(address, opts)
   local agent = self.idx:symbol(symbol)
   if state and agent and agent.source == "agent" then
     local path = self.idx:abs(file)
-    local parser = backend and backend.parser
+    local parser = backend and require("code-tour.ast.index").parser_of(backend, file)
     if symbol == address then return digest_range(path, state, agent.range, parser), agent.range, agent end
     for _, region in ipairs(agent.agent_regions) do
       if address == region.address then return digest_range(path, state, region.range, parser), region.range, agent end
@@ -326,7 +326,8 @@ function Store:region_fingerprint(address, opts)
   end
   state.fingerprints = state.fingerprints or {}
   if not state.fingerprints[address] then
-    state.fingerprints[address] = digest_range(self.idx:abs(file), state, range, backend.parser)
+    state.fingerprints[address] = digest_range(self.idx:abs(file), state, range,
+      require("code-tour.ast.index").parser_of(backend, file))
   end
   return state.fingerprints[address], range, sym
 end
@@ -757,7 +758,7 @@ local function head_facts(store, file)
   local backend = store.idx:backend(file)
   local checkout, inside = store.idx:git_dir(file)
   local head = store.idx:head_of(file)
-  if not head or not backend or not parser_available(backend.parser) then
+  if not head or not backend or not parser_available(require("code-tour.ast.index").parser_of(backend, file)) then
     return false
   end
   local tree = git(checkout, "ls-tree", "-z", head, "--", inside)

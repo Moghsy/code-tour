@@ -1,12 +1,18 @@
 local M = {}
 
 local function read(idx, file)
+  -- unsaved edits win; otherwise the disk, as the note store reads it (a loaded but
+  -- unmodified buffer may not have been reloaded since the file changed)
   local buf = vim.fn.bufnr(idx:abs(file))
-  if buf > 0 and vim.api.nvim_buf_is_loaded(buf) then
+  local loaded = buf > 0 and vim.api.nvim_buf_is_loaded(buf)
+  if loaded and vim.bo[buf].modified then
     return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   end
   if vim.fn.filereadable(idx:abs(file)) == 1 then
     return vim.fn.readfile(idx:abs(file))
+  end
+  if loaded then
+    return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   end
 end
 
@@ -19,16 +25,35 @@ local function fingerprint(lines, first, last)
   return vim.fn.sha256(table.concat(lines, "\n", first, last))
 end
 
+-- Short per-line hashes, so a range whose code changed can still be found (best overlap).
+local function line_hashes(lines, first, last)
+  local out = {}
+  for i = first, last do
+    out[#out + 1] = vim.fn.sha256(vim.trim(lines[i] or "")):sub(1, 12)
+  end
+  return out
+end
+
 function M.normalize(idx, input)
   if type(input.file) ~= "string" then
     return nil, "--add requires a file"
   end
-  local file = idx:rel(vim.fs.normalize(idx.root .. "/" .. input.file))
-  if input.file:sub(1, 1) == "/" then
-    file = idx:rel(input.file)
-  end
+  local path = input.file:sub(1, 1) == "/" and input.file or (idx.root .. "/" .. input.file)
+  path = vim.fs.normalize(vim.fn.simplify(path))
+  local file = idx:rel(path)
+  local repo
   if file:sub(1, 1) == "/" then
-    return nil, "--add file must be in the project"
+    -- a file in another checkout (§14): it joins the index as an extra repository
+    if vim.fn.filereadable(path) ~= 1 then
+      return nil, "no such file: " .. input.file
+    end
+    repo, file = idx:attach(path)
+  else
+    repo = idx:repo_of(file) -- attached already, by an earlier range in this build
+    repo = repo and repo.attached and repo or nil
+  end
+  if repo then
+    repo = { dir = repo.dir, root = repo.root, attached = true }
   end
   local lines = read(idx, file)
   if not lines or not valid(input.start, input["end"], 1, #lines) then
@@ -36,7 +61,8 @@ function M.normalize(idx, input)
   end
   local first, last = input.start, input["end"]
   local fp = fingerprint(lines, first, last)
-  local spec = { file = file, start = first, size = last - first + 1, fingerprint = fp,
+  local spec = { file = file, start = first, size = last - first + 1, fingerprint = fp, repo = repo,
+    line_hashes = line_hashes(lines, first, last),
     id = "agent:" .. file .. ":" .. fp, label = input.label or vim.fs.basename(file), regions = {}, sites = {} }
   if type(spec.label) ~= "string" or (input.regions ~= nil and not vim.islist(input.regions))
       or (input.sites ~= nil and not vim.islist(input.sites)) then
@@ -75,6 +101,9 @@ end
 
 function M.register(rt, spec)
   local idx = rt.idx
+  if spec.repo then
+    idx:attach(nil, spec.repo) -- the checkout recorded with the range, for a reopened tour
+  end
   local lines = read(idx, spec.file) or {}
   local first = spec.start
   if first + spec.size - 1 > #lines or fingerprint(lines, first, first + spec.size - 1) ~= spec.fingerprint then
@@ -88,7 +117,22 @@ function M.register(rt, spec)
       end
     end
     if not first then
-      return nil, "agent range changed in " .. spec.file
+      -- the code changed: keep the range where most of its lines still are (or where it was),
+      -- under the same id, so its notes are found and shown as stale rather than lost
+      local best, score = nil, 0
+      for at = 1, #lines - spec.size + 1 do
+        local hits = 0
+        for k, h in ipairs(spec.line_hashes or {}) do
+          if line_hashes(lines, at + k - 1, at + k - 1)[1] == h then hits = hits + 1 end
+        end
+        if hits > score or (hits == score and hits > 0 and math.abs(at - spec.start) < math.abs(best - spec.start)) then
+          best, score = at, hits
+        end
+      end
+      first = best or (spec.start + spec.size - 1 <= #lines and spec.start or nil)
+      if not first then
+        return nil, "agent range is gone from " .. spec.file
+      end
     end
   end
   local sym = { id = spec.id, file = spec.file, name = spec.label, label = spec.label, kind = "method",

@@ -1315,7 +1315,7 @@ function M.ast_tour(request)
   end
   local live, err = require("code-tour.ast.live").new(request)
   if not live then
-    local fallback = ast.fallback_reason(err)
+    local fallback = ast.fallback_reason(err, request.root)
     if fallback then return { fallback = true, reason = fallback } end
     error(err, 0)
   end

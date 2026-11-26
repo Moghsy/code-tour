@@ -54,8 +54,9 @@ function M.available(path, symbol)
   if not backend then
     return false, "no backend"
   end
-  if not parser_available(backend.parser) then
-    return false, "no parser for " .. backend.parser
+  local parser = require("code-tour.ast.index").parser_of(backend, path)
+  if not parser_available(parser) then
+    return false, "no parser for " .. parser
   end
   local idx = M.index({ root = vim.fs.dirname(vim.fn.fnamemodify(path, ":p")) })
   local facts, err = idx:facts(idx:rel(path))
@@ -123,7 +124,12 @@ local function manifest_of(idx)
     synthesizers[language] = vim.tbl_keys(rules)
     table.sort(synthesizers[language])
   end
-  return { schema = 1, files = files,
+  -- a backend's extraction code is part of what the graph was built from, so upgrading it rebuilds
+  local extractors = {}
+  for _, backend in ipairs(idx.backends or {}) do
+    extractors[backend.name] = backend.version
+  end
+  return { schema = 1, files = files, extractors = extractors,
     config = vim.fn.sha256(vim.inspect({ M.options.languages, M.options.boundaries, synthesizers })) }
 end
 
@@ -151,7 +157,8 @@ function M.analyze(opts)
     return M.concepts({ root = opts.root, cache_dir = opts.cache_dir, action = "list" })
   end
 
-  local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest)) .. (opts.tests and "+tests" or "")
+  local key = vim.fn.sha256(vim.json.encode(graph.graph.manifest)) .. "+v" .. analysis.version
+    .. (opts.tests and "+tests" or "")
   local cache = vim.fs.dirname(built.path) .. "/analysis.json"
   local data
   local cfd = io.open(cache, "rb")
@@ -233,21 +240,51 @@ function M.code_graph(opts)
     reused = false, truncated = idx.truncated or nil }
 end
 
-function M.fallback_reason(err)
+-- Which languages the AST covers here, so the agent knows to author the tour (and can tell the
+-- reader how to enable Python) rather than retry the entry.
+local function with_languages(reason)
+  local enabled = M.options.languages or {}
+  local missing = vim.tbl_filter(function(name)
+    return not vim.tbl_contains(enabled, name)
+      and not (name == "typescript" and vim.tbl_contains(enabled, "javascript"))
+  end, { "python", "typescript" })
+  local hint = #missing == 0 and ""
+    or ("; opt-in: %s, via ast.languages in setup, or CODE_TOUR_AST_LANGUAGES=java,%s")
+      :format(table.concat(missing, " and "), table.concat(missing, ","))
+  return ("%s (AST languages enabled: %s%s)"):format(reason, table.concat(enabled, ", "), hint)
+end
+
+-- err: why the tour could not be built; idx: the project index, or the root to build one for.
+-- A reason means "author the tour instead"; nil means the error is the agent's to fix.
+function M.fallback_reason(err, idx)
   if type(err) ~= "string" then return end
   if err:find("no parser", 1, true) or err:find("no backend", 1, true) or err:find("parse error", 1, true) then
-    return err
+    return with_languages(err)
   end
   if not (err:match("^no type") or err:match("^no method") or err:match("^no symbol")) then return end
-  local missing
+  local missing, usable
   for _, language in ipairs(M.options.languages) do
     local ok, backend = pcall(require, "code-tour.ast.lang." .. language)
     if ok then
-      if parser_available(backend.parser) then return end
-      missing = missing or backend.parser
+      if parser_available(backend.parser) then
+        usable = true
+      else
+        missing = missing or backend.parser
+      end
     end
   end
-  return missing and ("no parser for " .. missing) or "no supported backend"
+  if not usable then
+    return with_languages(missing and ("no parser for " .. missing) or "no supported backend")
+  end
+  -- An unknown symbol in a project with no file in an enabled language (a JavaScript or Lua
+  -- repository, or Python before it is enabled) is not a typo: there is nothing to resolve.
+  if type(idx) ~= "table" then
+    local ok, built = pcall(M.index, { root = idx })
+    idx = ok and built or nil
+  end
+  if idx and #(idx.files or {}) == 0 then
+    return with_languages("no source file in an enabled AST language")
+  end
 end
 
 -- §9.1 dry run: build the tour for entries and return its outline without opening it.
@@ -276,7 +313,7 @@ function M.outline(entries, opts)
     },
   })
   if not tour then
-    local reason = M.fallback_reason(err)
+    local reason = M.fallback_reason(err, idx)
     if reason then return { fallback = true, reason = reason, root = idx.root } end
     error(err, 0)
   end

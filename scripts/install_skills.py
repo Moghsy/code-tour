@@ -36,6 +36,12 @@ for discovery in ('.agents', '.codex', '.claude'):
             # Preserve an existing installation without leaving two active skills.
             old_skill = legacy / 'SKILL.md'
             old_skill.rename(old_skill.with_name('SKILL.md.backup-' + stamp))
+    # Directory-level backups made by older installers still hold a SKILL.md, so agents load
+    # them as competing skills that predate AST tours. Keep their files, but disable them.
+    for stale in sorted((args.home / discovery / 'skills').glob('code-walkthrough.backup-*')):
+        if (stale / 'SKILL.md').is_file():
+            (stale / 'SKILL.md').rename(stale / ('SKILL.md.backup-' + stamp))
+            print(f'disabled stale skill copy {stale}')
     for resource in resources:
         install(target / resource.relative_to(source), resource)
     # Commands already delivered to an agent may still name this exact script.

@@ -5,6 +5,8 @@
 -- and cached in analysis.json beside the graph, keyed by the graph's manifest hash.
 local M = {}
 
+M.version = 2 -- bump when a view's output changes (invalidates analysis.json)
+
 local STRUCTURE = { calls = 1, overrides = 1, inherits = 1, implements = 1, extends = 1, references = 0.5 }
 local CONTAINS = 2
 
@@ -15,15 +17,18 @@ local function is_test(node)
   local base = file:match("([^/]+)$") or file
   return file:match("^tests?/") ~= nil or file:match("/tests?/") ~= nil or base:match("^test_") ~= nil
     or base:match("_test%.py$") ~= nil or base:match("Tests?%.java$") ~= nil or base == "conftest.py"
+    or base:match("%.test%.[mc]?[tj]sx?$") ~= nil or base:match("%.spec%.[mc]?[tj]sx?$") ~= nil
+    or file:match("__tests__/") ~= nil
 end
 
 local function owner_of(id)
   return id:match("^(.-)#")
 end
 
--- Java-style ids (`java:a.b.Type#m()`) carry the package; others (Python) use the file's module path.
+-- Java ids carry the package, a type's too (`java:a.b.Type` -> `a.b`); module-level Python
+-- symbols have no owner, so they use the file's module path.
 local function package_of(id, node)
-  if not id:find("#", 1, true) and node and node.source_file then
+  if not id:find("#", 1, true) and not id:match("^java:") and node and node.source_file then
     return (node.source_file:gsub("%.%w+$", ""):gsub("^src/", ""):gsub("/__init__$", ""):gsub("/", "."))
   end
   local qname = id:match("^%a+:([^#]+)")
@@ -37,6 +42,9 @@ local function type_of(id)
     return owner:match("([^.]+)$") or id
   end
   local qname = id:match("^%a+:(.+)$") or id
+  if id:match("^java:") then
+    return qname:match("([^.]+)$") or qname -- a Java type is its own unit
+  end
   return qname:match("^(.*)%.[^.]+$") and qname:match("([^.]+)%.[^.]+$") or qname
 end
 

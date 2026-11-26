@@ -84,7 +84,7 @@ local function reopen(idx, saved, entries, through, overrides)
     -- a route edge follows a renamed symbol the way an entry does: by the fingerprint saved with the recipe
     if op.kind == "route" then
       for _, key in ipairs({ "from", "to" }) do
-        if not rt:resolve_entry(op[key]) then
+        if type(op[key]) == "string" and not op[key .. "_spec"] and not rt:resolve_entry(op[key]) then
           local evidence = (saved.symbols or {})[op[key]]
           op[key] = evidence and old_symbol(idx, evidence) or op[key]
         end
@@ -467,7 +467,8 @@ function L:remember()
   for _, op in ipairs(recipe.overrides or {}) do
     if op.kind == "route" then
       for _, key in ipairs({ "from", "to" }) do
-        local ids = resolver:resolve_entry(op[key])
+        -- a range end carries its own fingerprint (op.from_spec, op.to_spec)
+        local ids = type(op[key]) == "string" and not op[key .. "_spec"] and resolver:resolve_entry(op[key])
         local sym = ids and #ids == 1 and self.idx:symbol(ids[1])
         if sym and sym.range and not sym.implicit then
           recipe.symbols[op[key]] = { fingerprint = relocation(self.idx, sym), kind = sym.kind, file = sym.file }

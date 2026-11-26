@@ -65,6 +65,21 @@ code-tour concept add "Order totalling" --members Order#total DiscountPolicy#app
 
 A route that names a call by symbol applies to every call site of that callee in the caller; add `"site": "email.send"` (the call as written) to name one. A call you do not name stays lazy, and the reader can still open it.
 
+## Jumps and code outside the AST
+
+A route edge is a call unless it says `"kind": "jump"`. A jump goes where the code does not call: the interface or type that defines an API, a route table, a config file, a client in another repository. It never replaces a real call's target, so do not use `--edge` for this.
+
+```json
+[{"from": "OrderController#postOrder", "to": "PaymentGateway", "kind": "jump", "at": "gateway", "level": 0},
+ {"from": "OrderService#checkout", "to": {"file": "../web/src/api.ts", "start": 12, "end": 30, "label": "Web client"}, "kind": "jump", "level": 1}]
+```
+
+- `to` is a symbol, a type (its declaration is shown) or a `{"file", "start", "end", "label"?}` range in any language. `from` can be a range too, and a range end makes the edge a jump.
+- `at` is the text in `from` the jump hangs from, and `"line": N` picks the line. It decides which box offers the jump and where the walk takes it. Without `at`, it hangs from the declaration.
+- A file outside the project, given as an absolute path or relative to it, is read from its own checkout and shows as `@NAME/path`. Nothing is written there; its notes live in this project's store and go stale when its code changes.
+- To start a tour in non-AST code, pass the range with `--add` (no `site`), then route from it: rate its declared sites (`--rate n1.s1=0`), or add a jump with the range as `from`.
+- The outline marks jumps `(jump: TARGET)`. Fill them like any snippet. A warning such as `jump A -> B: no "text" in A` means the anchor was not found.
+
 ## Fill ids, Markdown and partial fills
 
 Fill ids look like `n13`, a snippet of the live tour; anything else is refused before the editor is asked. Pass `--markdown` with `--fill` so the input is never parsed as JSON. A fill that leaves boxes unwritten returns `partial: true`, a `warning` and the `remaining` list, and the CLI repeats the warning on stderr: keep filling until `remaining` is empty.

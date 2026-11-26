@@ -152,6 +152,15 @@ def unpack(buffer, pos=0):
     raise RuntimeError(f'Invalid MessagePack byte 0x{code:02x} in editor reply')
 
 
+def editor_error(error):
+    """The message of an RPC error ([type, message]), without Lua's location prefix or traceback."""
+    message = str(error[1] if isinstance(error, list) and len(error) == 2 else error)
+    message = message.split('\nstack traceback:', 1)[0]
+    message = re.sub(r'^Lua: ', '', message)
+    # error(msg) with a level adds "file:line: "; the text after it is what the caller wrote
+    return re.sub(r'^(?:\[string "[^"]*"\]|\S+\.lua):\d+: ', '', message).strip()
+
+
 def rpc(address, code, args=(), timeout=3):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(timeout)
@@ -171,7 +180,7 @@ def rpc(address, code, args=(), timeout=3):
                     break
                 if isinstance(response, list) and response[0] == 1 and response[1] == 1:
                     if response[2]:
-                        raise RuntimeError(str(response[2]))
+                        raise RuntimeError(editor_error(response[2]))
                     return response[3]
             buffer = buffer[pos:]
 
@@ -743,6 +752,10 @@ def ast_main(argv):
         result = headless('ast', dict(request=json.dumps(request)))
     if result.get('fallback'):
         print(json.dumps(result))
+    elif result.get('auto') and not result['candidates'] and not args.json:
+        raise RuntimeError('No entry candidates: no source file of an enabled AST language was found. '
+                           'Python and TypeScript/JavaScript are opt-in: set ast.languages in setup, '
+                           'or CODE_TOUR_AST_LANGUAGES=java,python,typescript here.')
     elif result.get('auto'):
         print(json.dumps(result) if args.json else '\n'.join(
             f"{i}. {item['label']} · {item['file']} · score {item['score']} · {item['callers']} callers · {item['project_sites']} calls"
@@ -776,8 +789,28 @@ def override_arguments(parser):
                 for edge in edges:
                     if not isinstance(edge, dict) or not edge.get('from') or not edge.get('to'):
                         parser.error(f'--route: every edge needs "from" and "to": {edge!r}')
+                    for key in ('from', 'to'):
+                        end = edge[key]
+                        if isinstance(end, dict) and not (isinstance(end.get('file'), str)
+                                                          and isinstance(end.get('start'), int)
+                                                          and isinstance(end.get('end'), int)):
+                            parser.error(f'--route: a range {key} needs "file", "start" and "end": {end!r}')
+                        if not isinstance(end, (str, dict)):
+                            parser.error(f'--route: "{key}" is a symbol or a {{"file", "start", "end"}} range: {end!r}')
+                    kind = edge.get('kind', 'call')
+                    if kind not in ('call', 'jump'):
+                        parser.error(f'--route: "kind" is "call" or "jump": {edge!r}')
+                    ranged = isinstance(edge['from'], dict) or isinstance(edge['to'], dict)
+                    if ranged and edge.get('kind') == 'call':
+                        parser.error(f'--route: a range end can only be a jump: {edge!r}')
                     item = dict(kind='route', **{'from': edge['from'], 'to': edge['to'], 'level': int(edge.get('level', 0))})
-                    if edge.get('site'):
+                    if kind == 'jump' or ranged:
+                        # a jump is not a call: it hangs from the "at" text (on "line") inside "from"
+                        item['jump'] = True
+                        for key in ('at', 'line'):
+                            if edge.get(key) is not None:
+                                item[key] = edge[key]
+                    elif edge.get('site'):
                         item['site'] = edge['site']  # only the call written as this text, e.g. "fallback.apply"
                     overrides.append(item)
             else:
@@ -789,7 +822,7 @@ def override_arguments(parser):
             setattr(namespace, self.dest, overrides)
 
     parser.add_argument('--route', action=Route, dest='overrides', metavar='FILE|-',
-                        help='The tour route as JSON edges [{"from", "to", "level", "site"?}]: level 0 is the main walk, 1+ optional branches, "site" limits an edge to one call written as that text; unnamed calls stay lazy')
+                        help='The tour route as JSON edges [{"from", "to", "level", "site"?}]: level 0 is the main walk, 1+ optional branches, "site" limits an edge to one call written as that text; unnamed calls stay lazy. "kind": "jump" (with "at": TEXT, "line"?) goes where the code does not call, and either end may then be a {"file", "start", "end"} range, in another repository too')
     parser.add_argument('--walk', action=Route, dest='overrides', metavar="'A -> B'", help='Put one call on the main walk')
     parser.add_argument('--branch', action=Route, dest='overrides', metavar="'A -> B@N'", help='Offer one call as an optional branch at level N (default 1)')
     parser.add_argument('--rate', action=Override, dest='overrides', metavar='n1.s2=0', help='Rate a call site')

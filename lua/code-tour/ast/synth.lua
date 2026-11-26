@@ -9,7 +9,8 @@
 --            fields = { {name, type = {name, spelled}, static?, final?, annotations = {names},
 --                        args = {…}} } }
 --   spec = { kind = "method"|"constructor"|"field"|"type", name, params = { {name, type} },
---            returns = spelled, static?, members? (for kind = "type"), type? (for a field) }
+--            returns = spelled, static?, members? (for kind = "type"), type? (for a field),
+--            field? (the field an accessor is for: the member points at it in the source) }
 --
 -- Rules are keyed by the annotation's simple name and see the whole type, so a class-level
 -- and a field-level annotation (`@Getter` on either) are handled by the same rule. Users
@@ -69,13 +70,13 @@ end
 local function getter(type, f)
   local acc = accessors(type)
   return { kind = "method", name = acc.fluent and f.name or ((is_bool(f) and "is" or "get") .. cap(f.name)),
-    params = {}, returns = f.type and f.type.spelled }
+    params = {}, returns = f.type and f.type.spelled, field = f.name }
 end
 
 local function setter(type, f)
   local acc = accessors(type)
   return { kind = "method", name = acc.fluent and f.name or ("set" .. cap(f.name)),
-    returns = acc.chain and type.name or "void", params = { { name = f.name, type = f.type } } }
+    returns = acc.chain and type.name or "void", params = { { name = f.name, type = f.type } }, field = f.name }
 end
 
 local function getters(type)
@@ -159,7 +160,7 @@ local function with(type)
   for _, f in ipairs(targets(type, "With")) do
     if not f.final or has(type.annotations, "With") or has(f.annotations, "With") then
       specs[#specs + 1] = { kind = "method", name = "with" .. cap(f.name), returns = type.name,
-        params = { { name = f.name, type = f.type } } }
+        params = { { name = f.name, type = f.type } }, field = f.name }
     end
   end
   return specs

@@ -10,7 +10,7 @@ local function is_test(sym, owner)
     if name == "Test" or name == "ParameterizedTest" or name == "RepeatedTest" then return true end
   end
   return sym.file:match("^tests?/") or sym.file:match("/tests?/")
-    or (owner and (owner.name:match("Tests?$")))
+    or (owner and owner.name and owner.name:match("Tests?$"))
     or (sym.id:match("^python:") and sym.name:match("^test_"))
 end
 
@@ -24,7 +24,8 @@ local function catalog(idx)
   for _, file in ipairs(idx.files) do
     local base = vim.fs.basename(file)
     if candidates[file] or file:match("^tests?/") or file:match("/tests?/")
-        or base:match("Tests?%.java$") or base:match("^test_.*%.py$") or base:match("_test%.py$") then
+        or base:match("Tests?%.java$") or base:match("^test_.*%.py$") or base:match("_test%.py$")
+        or base:match("%.test%.[mc]?[tj]sx?$") or base:match("%.spec%.[mc]?[tj]sx?$") or file:match("__tests__/") then
       idx:facts(file)
       count = count + 1
       if count >= idx.max_files then break end

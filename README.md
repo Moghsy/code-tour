@@ -78,11 +78,12 @@ The commands, tour format and saved tours are also in [SPEC-old.md](SPEC-old.md)
 
 ## AST-backed tours
 
-AST tours use Neovim's Tree-sitter parsers. Java is enabled by default. Enable Python in Neovim with `ast = { languages = { "java", "python" } }` in the plugin setup. Use a symbol or a source position to start a tour, or list candidate entry points with `--auto`.
+AST tours use Neovim's Tree-sitter parsers. Java is enabled by default. Enable Python and TypeScript/JavaScript in Neovim with `ast = { languages = { "java", "python", "typescript" } }` in the plugin setup (`javascript` is another name for `typescript`: one backend serves both). TypeScript and JavaScript need the `typescript` and `tsx` parsers, and their symbols are named by file path, such as `typescript:src.orders.service.OrderService.place`. Use a symbol or a source position to start a tour, or list candidate entry points with `--auto`.
 
 ```sh
 code-tour ast 'OrderService#checkout' --detail normal
 CODE_TOUR_AST_LANGUAGES=java,python code-tour ast python:shop.order.checkout --dry-run
+CODE_TOUR_AST_LANGUAGES=typescript code-tour ast src/server.ts:12 --dry-run
 code-tour ast --auto
 ```
 
@@ -99,7 +100,7 @@ An agent can inspect the current code with `code-tour explain`, `flow`, `callers
 The plugin supplies facts and the agent supplies judgement, in three steps:
 
 1. **Understand.** `code-tour codegraph` persists the resolved symbol graph to `.code-tour/graph.json`, reused until a file, the language set or the resolution config changes. `code-tour analyze communities|gods|crossings|neighbors SYMBOL` gives lazy views over it (clusters of related symbols, hub symbols, calls between clusters, callers and callees with their confidence). `code-tour concept add NAME --members …` records a named idea and the symbols that implement it, so later sessions start with that context.
-2. **Design the route.** The plugin never decides what matters. The agent names the flow as edges, `code-tour ast ENTRY --route route.json` with `[{"from": "A#a", "to": "B#b", "level": 0}]`, where level 0 is the main walk and 1 to 5 are optional branches. `--walk 'A -> B'` and `--branch 'A -> B@2'` name single edges, and `code-tour adjust` changes a live tour. A call the route does not name is lazy: the reader can open it, but nothing offers it.
+2. **Design the route.** The plugin never decides what matters. The agent names the flow as edges, `code-tour ast ENTRY --route route.json` with `[{"from": "A#a", "to": "B#b", "level": 0}]`, where level 0 is the main walk and 1 to 5 are optional branches. A jump edge (`"kind": "jump"`) goes where the code does not call, such as an API's definition or a range of code in another repository or language. `--walk 'A -> B'` and `--branch 'A -> B@2'` name single edges, and `code-tour adjust` changes a live tour. A call the route does not name is lazy: the reader can open it, but nothing offers it.
 3. **Explain.** The agent fills the boxes with `code-tour --fill nK`, using the context it gathered.
 
 Calls are bound by receiver type, never by bare name, so an unknown receiver stays unresolved instead of matching an unrelated method. Members generated at build time (Lombok builders including `@SuperBuilder` and `@Builder` on constructors and static methods, getters, setters, `@With`, `@Singular`, `@Slf4j` loggers and constructors, and Python dataclasses) are synthesized from annotations; add rules for other generators with `ast.synthesizers`, and continue calls the language cannot follow, such as a Lambda invoke, with `ast.boundaries = { { call = "AWSLambda.invoke", to = "OrderHandler#handleRequest" } }`.

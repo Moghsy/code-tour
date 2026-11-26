@@ -582,6 +582,28 @@ class AstDryRunTests(unittest.TestCase):
         self.assertEqual(len(tour['gaps']), 2)
         self.assertTrue(all(r['main'] for r in tour['route'] if r['mode'] == 'walk'))
 
+    def test_jumps_in_the_route(self):
+        route = Path(self.tmp.name) / 'jumps.json'
+        def run(edges):
+            route.write_text(json.dumps(edges))
+            return self.ast('OrderService#checkout', '--dry-run', '--route', str(route))
+        bad = run([{'from': 'OrderService#checkout', 'to': {'file': 'x.js'}, 'kind': 'jump'}])
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn('needs "file", "start" and "end"', bad.stderr)
+        bad = run([{'from': 'OrderService#checkout', 'to': 'Notifier', 'kind': 'teleport'}])
+        self.assertIn('"kind" is "call" or "jump"', bad.stderr)
+        web = Path(self.tmp.name) / 'web'
+        web.mkdir()
+        (web / 'api.js').write_text('export function checkout(order) {\n  return fetch("/api");\n}\n')
+        proc = run([{'from': 'OrderService#checkout', 'to': 'Notifier', 'kind': 'jump', 'at': 'notifier', 'line': 37},
+                    {'from': 'OrderService#checkout', 'to': {'file': str(web / 'api.js'), 'start': 1, 'end': 3,
+                                                             'label': 'Web client'}, 'level': 1}])
+        self.skip_without_parser(proc)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('(jump: Notifier)', proc.stdout)
+        self.assertIn('(jump: Web client)', proc.stdout)
+        self.assertRegex(proc.stdout, r'n\d Web client\s+api\.js:1-3')
+
     def test_through(self):
         edges = [e for e in json.loads((PLUGIN / 'tests/fixtures/routes/pipeline.json').read_text())
                  if not e['to'].endswith('Pipeline#audit(String)')]
@@ -817,6 +839,8 @@ class AstTourTests(unittest.TestCase):
         _, token = self.start()
         proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, expected=1)
         self.assertIn('--force', proc.stderr)
+        self.assertTrue(proc.stderr.startswith('A live AST tour'), 'the editor error is shown as its message alone')
+        self.assertNotIn('stack traceback', proc.stderr)
         self.assertEqual(cli.rpc(self.address, 'return require("tour").state().id'), token)
         self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, '--force')
         self.assertNotEqual(cli.rpc(self.address, 'return require("tour").state().id'), token)

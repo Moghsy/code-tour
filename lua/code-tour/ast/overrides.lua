@@ -30,11 +30,34 @@ local function region(sn, id)
   end
 end
 
+-- A route end given as a source range becomes a fingerprinted agent range once, here, so the
+-- recipe keeps the code it named and a rebuild relocates it rather than re-reading the lines.
+local function pin_ends(rt, op)
+  if op.kind ~= "route" then
+    return op
+  end
+  local pinned = vim.deepcopy(op)
+  for _, key in ipairs({ "from", "to" }) do
+    if type(op[key]) == "table" then
+      local spec, err = require("code-tour.ast.fallback").normalize(rt.idx, op[key])
+      if not spec then
+        return nil, ("route %s: %s"):format(key, err)
+      end
+      pinned[key .. "_spec"], pinned[key] = spec, spec.id
+    end
+  end
+  return pinned
+end
+
 function M.normalize(rt, snippets, ops, detail)
   local result = {}
   for _, op in ipairs(ops or {}) do
     if op.value == nil then
-      result[#result + 1] = op
+      local pinned, err = pin_ends(rt, op)
+      if not pinned then
+        return nil, err
+      end
+      result[#result + 1] = pinned
     else
       local kind, value = op.kind, op.value
       local n, sid, raw
@@ -119,13 +142,82 @@ function M.normalize(rt, snippets, ops, detail)
   return result
 end
 
--- The agent's route: { kind = "route", from, to, level }. Both ends are symbol specs resolved
--- here, so a route survives a rebuild; an end that no longer resolves is a warning.
+local function label_of(spec)
+  return type(spec) == "table" and (spec.label or spec.file or "range") or tostring(spec)
+end
+
+-- One end of a route edge: a symbol spec, a range (raw, or pinned as op.from_spec/op.to_spec)
+-- or, for a jump's target, a type. Returns { id } or nil and a reason.
+local function route_end(rt, op, key)
+  local fallback = require("code-tour.ast.fallback")
+  local spec = op[key .. "_spec"]
+  if not spec and type(op[key]) == "table" then
+    local err
+    spec, err = fallback.normalize(rt.idx, op[key])
+    if not spec then return nil, err end
+  end
+  if spec then
+    local ok, err = fallback.register(rt, spec)
+    if not ok then return nil, err end
+    return { spec.id }
+  end
+  local ids, err = rt:resolve_entry(op[key])
+  local sym = ids and #ids == 1 and rt.idx:symbol(ids[1])
+  if op.kind ~= "jump" or (sym and not sym.methods) then
+    return ids, err
+  end
+  -- a jump to a type (an interface, the class that declares an API) shows its declaration
+  local t = sym or (not op[key]:find("[#:]") and rt:find_type(op[key])) or nil
+  if not (t and t.range and t.file) then
+    return ids, err
+  end
+  local first, last = require("code-tour.ast.outline").lines_of(t.range)
+  local pinned, perr = fallback.normalize(rt.idx, { file = t.file, start = first, ["end"] = last, label = t.label })
+  if not pinned then return nil, perr end
+  local ok, rerr = fallback.register(rt, pinned)
+  if not ok then return nil, rerr end
+  return { pinned.id }
+end
+
+-- The agent's route: { kind = "route", from, to, level, kind?, at?, line? }. Both ends are
+-- resolved here, so a route survives a rebuild; an end that no longer resolves is a warning.
+-- A jump (§8.3.1) is kept apart in rt.jumps: it becomes a site of its own, never a call's target.
 local function route_edges(rt, ops, warnings)
-  rt.route, rt.routed_bodies = {}, nil
+  rt.route, rt.routed_bodies, rt.jumps, rt.jump_bodies = {}, nil, {}, nil
   local edges = {}
   for _, op in ipairs(ops or {}) do
-    if op.kind == "route" then
+    if op.kind == "route" and (op.jump or op.from_spec or op.to_spec
+        or type(op.from) == "table" or type(op.to) == "table") then
+      local jump = vim.tbl_extend("force", op, { kind = "jump" })
+      local from, from_err = route_end(rt, jump, "from")
+      local to, to_err = route_end(rt, jump, "to")
+      local name = ("jump %s -> %s"):format(label_of(op.from), label_of(op.to))
+      if not from or #from ~= 1 then
+        warnings[#warnings + 1] = name .. ": " .. (from_err or "the jump must leave from one symbol or range")
+      elseif not to or #to ~= 1 then
+        warnings[#warnings + 1] = name .. ": " .. (to_err or "the jump must go to one symbol, type or range")
+      else
+        local list = rt.jumps[from[1]] or {}
+        local replaced = false
+        for _, j in ipairs(list) do
+          if j.to == to[1] and j.at == op.at then
+            j.level, replaced = tonumber(op.level) or 0, true
+          end
+        end
+        if not replaced then
+          local j = { to = to[1], level = tonumber(op.level) or 0, at = op.at, line = op.line,
+            label = label_of(op.to_spec or op.to), name = name }
+          local anchor, why = rt:jump_anchor(from[1], j)
+          if anchor then
+            j.anchor = anchor
+            list[#list + 1] = j
+          else
+            warnings[#warnings + 1] = name .. ": " .. why
+          end
+        end
+        rt.jumps[from[1]] = list
+      end
+    elseif op.kind == "route" then
       local from, from_err = rt:resolve_entry(op.from)
       local to, to_err = rt:resolve_entry(op.to)
       if not from or #from ~= 1 then
@@ -174,6 +266,28 @@ local function check_route(rt, edges, warnings)
   end
 end
 
+-- The added ranges that are entries (no `site`), raw from the CLI or already normalized in a
+-- recipe, registered and appended to entries. Returns an error for a range that cannot be read.
+function M.add_entries(rt, ops, entries)
+  local fallback = require("code-tour.ast.fallback")
+  for _, op in ipairs(ops or {}) do
+    if op.kind == "add" then
+      local spec = op.spec
+      if not spec and op.value then
+        local ok, raw = pcall(vim.json.decode, op.value)
+        if ok and type(raw) == "table" and not raw.site then
+          local err
+          spec, err = fallback.normalize(rt.idx, raw)
+          if not spec then return err end
+        end
+      end
+      if spec and not op.symbol and fallback.register(rt, spec) and not vim.tbl_contains(entries, spec.id) then
+        entries[#entries + 1] = spec.id
+      end
+    end
+  end
+end
+
 function M.apply(rt, ops, entries, warnings)
   rt.site_overrides = {}
   local edges = route_edges(rt, ops, warnings)
@@ -183,7 +297,7 @@ function M.apply(rt, ops, entries, warnings)
       local ok, err = require("code-tour.ast.fallback").register(rt, op.spec)
       if not ok then
         warnings[#warnings + 1] = err
-      elseif not op.symbol then
+      elseif not op.symbol and not vim.tbl_contains(entries, op.target) then
         entries[#entries + 1] = op.target
       end
     end

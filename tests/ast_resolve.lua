@@ -351,6 +351,13 @@ t.finish("ast resolve", function()
   eq(t.targets(t.site(via_val, "p.getName")), { "java:app.Person#getName()" }, "val takes its type from the initializer")
   eq(t.targets(t.site(via_val, "q.isActive")), { "java:app.Person#isActive()" }, "var takes its type from the initializer")
   check(person.symbols["java:app.Person#getName()"].synthetic == "Getter", "generated members are marked synthetic")
+  -- a generated member points at its source, never the whole type (that snippet would enclose
+  -- the type's own methods and break the walk)
+  eq(person.symbols["java:app.Person#getName()"].range.start[1], 4, "an accessor's range is its field")
+  eq(person.symbols["java:app.Person#isActive()"].range, person.symbols["java:app.Person#active"].range,
+    "the boolean accessor's range is its field's")
+  eq(person.symbols["java:app.Person#builder()"].range, { start = { 2, 0 }, ["end"] = { 2, 8 } },
+    "a member with no field points at the annotation that generated it")
   local box = e.resolver:resolve_file("src/app/Lombok2.java").bodies["java:app.Box#go(Box)"]
   eq(t.targets(t.site(box, "b.label")), { "java:app.Box#label()" }, "@Accessors(fluent) getter is named after the field")
   eq(t.targets(t.site(box, "b.size")), { "java:app.Box#size(int)" }, "a class-level @Setter with fluent accessors")

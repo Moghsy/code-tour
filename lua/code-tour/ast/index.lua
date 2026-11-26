@@ -44,7 +44,8 @@ local function backends(names)
   local list, by_ext = {}, {}
   for _, name in ipairs(names or { "java" }) do
     local ok, backend = pcall(require, "code-tour.ast.lang." .. name)
-    if ok then
+    -- two names may share a backend (javascript is typescript)
+    if ok and not vim.tbl_contains(list, backend) then
       list[#list + 1] = backend
       for _, ext in ipairs(backend.extensions) do
         by_ext[ext] = backend
@@ -52,6 +53,11 @@ local function backends(names)
     end
   end
   return list, by_ext
+end
+
+-- The grammar a backend uses for one file (a backend may serve several).
+function M.parser_of(backend, rel)
+  return backend.parser_for and backend.parser_for(rel) or backend.parser
 end
 
 local function extension(path)
@@ -88,6 +94,11 @@ function M.new(opts)
     stats = { parsed = 0, cached = 0, buffers = 0 },
     errors = {},
   }, Index)
+  for _, backend in ipairs(list) do
+    if backend.configure then
+      backend.configure(root)
+    end
+  end
   self:list_files()
   return self
 end
@@ -158,6 +169,7 @@ function Index:list_files()
     table.sort(self.repo_list, function(a, b)
       return #a.dir > #b.dir
     end)
+    vim.list_extend(self.repo_list, self.attached or {})
     for _, repo in ipairs(self.workspace.repos) do
       if vim.uv.fs_stat(repo.root .. "/.git") then
         git_files(repo.root, repo.dir, candidates, self.blobs)
@@ -194,6 +206,46 @@ function Index:list_files()
   end
 end
 
+-- A checkout outside the project that an agent range names (SPEC-ast-graph §14): it joins
+-- repo_list under the reserved directory `@NAME`, so abs/rel/git_dir/head_of work on its
+-- files as on a workspace repository's. Its files are not indexed (no symbols, no graph).
+-- repo: { dir, root } from a stored range spec, or nil to derive it from `path`.
+-- Returns the repository and `path` relative to the index.
+function Index:attach(path, repo)
+  self.attached = self.attached or {}
+  if repo then
+    for _, known in ipairs(self.attached) do
+      if known.root == repo.root then
+        return known
+      end
+    end
+  else
+    path = vim.fs.normalize(vim.fn.simplify(vim.fn.fnamemodify(path, ":p")))
+    for _, known in ipairs(self.attached) do
+      if path:sub(1, #known.root + 1) == known.root .. "/" then
+        return known, known.dir .. "/" .. path:sub(#known.root + 2)
+      end
+    end
+    local dir = vim.fs.dirname(path)
+    local top = vim.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, { text = true }):wait()
+    local root = top.code == 0 and vim.fs.normalize(vim.trim(top.stdout)) or dir
+    local name, taken = "@" .. vim.fs.basename(root), {}
+    for _, known in ipairs(self.attached) do
+      taken[known.dir] = true
+    end
+    local unique, k = name, 1
+    while taken[unique] do
+      k = k + 1
+      unique = name .. "-" .. k
+    end
+    repo = { dir = unique, root = root, attached = true }
+  end
+  self.attached[#self.attached + 1] = repo
+  self.repo_list = self.repo_list or {}
+  self.repo_list[#self.repo_list + 1] = repo
+  return repo, path and repo.dir .. "/" .. path:sub(#repo.root + 2) or nil
+end
+
 -- The workspace repository holding `rel` and the path inside it.
 function Index:repo_of(rel)
   for _, repo in ipairs(self.repo_list or {}) do
@@ -210,8 +262,10 @@ end
 
 function Index:rel(path)
   path = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  local inside = path:sub(1, #self.root + 1) == self.root .. "/"
   for _, repo in ipairs(self.repo_list or {}) do
-    if path:sub(1, #repo.root + 1) == repo.root .. "/" then
+    -- an attached checkout may contain the project itself; the project's own files stay its own
+    if not (repo.attached and inside) and path:sub(1, #repo.root + 1) == repo.root .. "/" then
       return repo.dir .. "/" .. path:sub(#repo.root + 2)
     end
   end
@@ -307,8 +361,9 @@ local function parser_tag(lang)
   return abi[lang]
 end
 
-function Index:cache_path(backend, sha)
-  return ("%s/%s-v%d-%s/%s.json"):format(self.cache_dir, backend.name, backend.version, parser_tag(backend.parser), sha)
+function Index:cache_path(backend, sha, rel)
+  local parser = M.parser_of(backend, rel)
+  return ("%s/%s-v%d-%s/%s.json"):format(self.cache_dir, backend.name, backend.version, parser_tag(parser), sha)
 end
 
 local function rebase(facts, rel)
@@ -341,8 +396,9 @@ function Index:facts(rel)
   if not backend then
     return nil, "no backend"
   end
-  if not M.parser_available(backend.parser) then
-    local err = "no parser for " .. backend.parser
+  local parser = M.parser_of(backend, rel)
+  if not M.parser_available(parser) then
+    local err = "no parser for " .. parser
     self.errors[rel] = err
     return nil, err
   end
@@ -365,7 +421,7 @@ function Index:facts(rel)
     if backend.cache_identity then
       sha = vim.fn.sha256(sha .. "\0" .. backend.cache_identity(rel))
     end
-    local file = self:cache_path(backend, sha)
+    local file = self:cache_path(backend, sha, rel)
     local fd = io.open(file, "r")
     if fd then
       local ok, decoded = pcall(vim.json.decode, fd:read("*a"), { luanil = { object = true, array = true } })
@@ -524,7 +580,12 @@ end
 
 -- Every project type with this simple name.
 function Index:declarations_named(name, language)
-  for _, file in ipairs(self:grep("\\b(class|interface|enum|record)\\s+" .. name .. "\\b")) do
+  local pattern = "\\b(class|interface|enum|record)\\s+" .. name .. "\\b"
+  -- TypeScript and JavaScript also declare types as `type X = {…}` and `const X = {…}`
+  if self.by_ext[".ts"] then
+    pattern = "\\b(class|interface|enum|record|type|const|let|var)\\s+" .. name .. "\\b"
+  end
+  for _, file in ipairs(self:grep(pattern)) do
     if not language or self:backend(file).name == language then
       self:facts(file)
     end

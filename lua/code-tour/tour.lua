@@ -2777,5 +2777,14 @@ function M.setup(opts)
       require("code-tour.instance").unregister()
     end,
   })
+  M.configured = true
+end
+
+-- For callers that only need the plugin to be available: setup() resets every option it is not
+-- given, so it must not run again over the user's config.
+function M.ensure_setup()
+  if not M.configured then
+    M.setup()
+  end
 end
 return M

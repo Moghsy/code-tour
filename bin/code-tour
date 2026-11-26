@@ -283,6 +283,14 @@ class Ambiguous(RuntimeError):
         super().__init__('Several Neovim instances match. Ask the user which --pane to use.')
 
 
+def setup_command(plugin):
+    """Make the tour available even if the Neovim config has not loaded the plugin.
+
+    A config that already called setup() is left alone: calling it again would reset its options.
+    """
+    return 'lua vim.opt.rtp:prepend(' + json.dumps(str(plugin)) + '); require("code-tour").ensure_setup()'
+
+
 def launch(root):
     session = os.environ.get('HERDR_SESSION')
     if not session:
@@ -295,9 +303,7 @@ def launch(root):
     pane = result['root_pane']['pane_id']
     address = str(Path(tempfile.gettempdir()) / f'code-tour-{os.getuid()}-{os.getpid()}.sock')
     plugin = Path(__file__).resolve().parents[1]
-    # Make the tour available even if this Neovim config has not loaded the plugin.
-    setup = 'lua vim.opt.rtp:prepend(' + json.dumps(str(plugin)) + '); require("code-tour").setup()'
-    argv = ['nvim', '--listen', address, '-c', setup]
+    argv = ['nvim', '--listen', address, '-c', setup_command(plugin)]
     herdr('pane', 'run', pane, shlex.join(argv), session=session)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:

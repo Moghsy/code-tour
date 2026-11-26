@@ -106,6 +106,30 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(items[0]['parts'][0]['calls'][0]['calls'][0]['file'], str(self.root / 'util.lua'))
 
 
+class LaunchSetupTests(unittest.TestCase):
+    def launched_state(self, *user_config):
+        report = ('lua io.stdout:write(vim.json.encode({ languages = require("code-tour.ast").options.languages, '
+                  'ready = vim.fn.exists(":CodeTourStop") == 2 }))')
+        with tempfile.TemporaryDirectory(prefix='code-tour-launch-') as temporary:
+            env = dict(os.environ, XDG_DATA_HOME=temporary, XDG_STATE_HOME=temporary)
+            for name in ('HERDR_ENV', 'HERDR_SESSION', 'HERDR_PANE_ID'):
+                env.pop(name, None)
+            argv = ['nvim', '--clean', '--headless']
+            for command in (*user_config, cli.setup_command(PLUGIN), report, 'qa!'):
+                argv += ['-c', command]
+            result = subprocess.run(argv, env=env, check=True, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.stderr, '')
+            return json.loads(result.stdout)
+
+    def test_launch_keeps_the_setup_from_the_user_config(self):
+        user = ('lua vim.opt.rtp:prepend(' + json.dumps(str(PLUGIN)) + '); '
+                'require("code-tour").setup({ ast = { languages = { "java", "typescript" } } })')
+        self.assertEqual(self.launched_state(user), {'languages': ['java', 'typescript'], 'ready': True})
+
+    def test_launch_sets_up_an_unconfigured_editor(self):
+        self.assertEqual(self.launched_state(), {'languages': ['java'], 'ready': True})
+
+
 class SkillMigrationTests(unittest.TestCase):
     def test_existing_skill_is_migrated_with_backups_and_legacy_reply_wrapper(self):
         with tempfile.TemporaryDirectory(prefix='code-tour-skills-') as temporary:

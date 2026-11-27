@@ -878,6 +878,7 @@ Members generated at build time (Lombok `@Builder`, `@Getter`, `@Setter`, `@Data
 | `ast.boundaries` | `{}` | cross-boundary edges `{call, to}` that continue a call the language cannot follow (§5.6) |
 | `ast.synthesizers` | `{}` | rules for members generated at build time (Lombok and the like), per language |
 | `ast.ignore` | `{}` | extra paths to remove from git's file list (§4.3) |
+| `ast.external` | `nil` | `function(qname, lang, root)`; `true` marks a Java type as outside the project, so it is not searched for by name once no file matches its path. Errors are ignored |
 | `ast.cutoffs` | the table in §8.6 | offer cutoff and budget per detail |
 | `ast.main_cap` | `40` | most main-flow snippets in a tour (§8.3) |
 | `ast.models` | `{}` | tier → model name for delegation (§9.7); empty means no delegation |

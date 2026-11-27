@@ -15,6 +15,8 @@ M.defaults = {
   languages = { "java" },
   ignore = {},
   max_files = 5000,
+  -- function(qname, lang, root) -> boolean: true for a type outside the project, which is then not searched for
+  external = nil,
   detail = "normal",
   cutoffs = nil, -- the table in §8.6 (route.defaults.cutoffs)
   main_cap = 40,
@@ -117,6 +119,7 @@ function M.index(opts)
     languages = M.options.languages,
     ignore = M.options.ignore,
     max_files = M.options.max_files,
+    external = M.options.external,
   }, opts or {})
   local idx = require("code-tour.ast.index").new(opts)
   idx.resolver = require("code-tour.ast.resolve").new(idx)
@@ -129,7 +132,7 @@ end
 function M.cached_index(opts, purpose)
   local fresh = M.index(opts)
   local key = vim.inspect({ purpose or "tour", fresh.root, (opts or {}).languages or M.options.languages, fresh.ignore,
-    fresh.max_files, fresh.cache_dir, M.options.boundaries, M.options.synthesizers })
+    fresh.max_files, fresh.cache_dir, tostring(fresh.external), M.options.boundaries, M.options.synthesizers })
   local signature = fresh:signature()
   local old = indexes[key]
   if old and old.signature == signature and old:buffers_current() then

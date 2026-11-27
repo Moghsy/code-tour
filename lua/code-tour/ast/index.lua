@@ -135,7 +135,7 @@ local function extension(path)
   return path:match("(%.[^./]+)$")
 end
 
--- opts: { root?, languages?, ignore = {patterns}, cache_dir?, max_files? }
+-- opts: { root?, languages?, ignore = {patterns}, cache_dir?, max_files?, external? }
 function M.new(opts)
   opts = opts or {}
   -- a workspace (several repositories under a root that is none) is opt-in: workspace.lua
@@ -164,6 +164,7 @@ function M.new(opts)
     ignore = opts.ignore or {},
     cache_dir = opts.cache_dir or (vim.fn.stdpath("cache") .. "/code-tour/ast"),
     max_files = opts.max_files or 5000,
+    external = opts.external, -- function(qname, lang, root): true when a type is not the project's
     loaded = {}, -- rel path -> facts
     symbols = {}, -- id -> symbol
     type_files = {}, -- type ID -> rel path
@@ -921,6 +922,14 @@ function Index:type(qname, language)
     end
     if self.type_files[id] then
       return self.symbols[id]
+    end
+  end
+  -- a type the user knows to be external is not searched for; a failing hook is ignored
+  if self.external then
+    local ok, external = pcall(self.external, qname, "java", self.root)
+    if ok and external == true then
+      self.type_misses[qname] = true
+      return nil
     end
   end
   self:declarations_named(segments[#segments], "java")

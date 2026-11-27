@@ -23,7 +23,36 @@ t.finish("AST cache", function()
   idx:type("shop.order.SdkException")
   idx:declarations_named("SdkException", "java")
   t.eq(#greps, 1, "A name that was not found is not searched again")
+
+  -- ast.external: a type it claims is not searched for
+  local asked, before = {}, #greps
+  vim.system = function(cmd, ...)
+    if cmd[4] == "grep" then greps[#greps + 1] = cmd end
+    return system(cmd, ...)
+  end
+  local function hooked(external)
+    return ast.index(vim.tbl_extend("force", opts, { external = external }))
+  end
+  local claimed = hooked(function(...) asked[#asked + 1] = { ... }; return true end)
+  t.eq(claimed:type("software.amazon.SdkClient"), nil, "An external type is not found")
+  claimed:type("software.amazon.SdkClient")
+  t.eq(#greps, before, "and not searched for")
+  t.eq(asked, { { "software.amazon.SdkClient", "java", claimed.root } }, "The hook is asked once")
+  t.check(claimed:type("shop.order.Order"), "A type found by its path is found")
+  t.eq(#asked, 1, "without asking the hook")
+  for name, external in pairs({ Declines = function() return false end, Fails = function() error("boom") end }) do
+    local count = #greps
+    t.eq(hooked(external):type("software.amazon." .. name), nil, name .. ": still not found")
+    t.eq(#greps, count + 1, name .. ": searched as usual")
+  end
   vim.system = system
+  ast.setup({ external = function() return true end })
+  local first = ast.cached_index(opts)
+  t.check(first.external, "The setup option reaches the index")
+  ast.options.external = function() return false end -- not through setup(), which clears the cache
+  t.check(ast.cached_index(opts) ~= first, "Another hook builds another index")
+  ast.setup()
+  idx = ast.cached_index(opts)
 
   local path = root .. "/" .. t.java .. "shop/order/Order.java"
   local buf = vim.fn.bufadd(path)

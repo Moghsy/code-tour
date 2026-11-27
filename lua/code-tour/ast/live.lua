@@ -105,7 +105,10 @@ local function reopen(idx, saved, entries, through, overrides, cwd)
   return current_entries, current_through, ops, warnings
 end
 
--- Build a live tour. request: { entries, root?, detail?, through?, cache_dir?, store? }.
+-- Build a live tour. request: { entries, root?, detail?, through?, cache_dir?, store?,
+-- review?, base? }. A review tours the changed symbols when no entry is given, and keeps its
+-- notes in memory: they describe a change, not the code, so the repository store neither
+-- supplies nor receives them.
 -- Returns live, or nil and an error.
 function M.new(request)
   local ast = require("code-tour.ast")
@@ -121,11 +124,19 @@ function M.new(request)
   if type(entries) == "string" then
     entries = { entries }
   end
-  if #entries == 0 and not auto and #overrides == 0 then
+  if #entries == 0 and not auto and #overrides == 0 and not request.review then
     return nil, "no entry"
   end
   local idx = ast.cached_index({ root = request.root, cache_dir = request.cache_dir })
   if request.on_index then request.on_index(idx) end
+  local base, review_warnings = request.review and (request.base or "HEAD") or nil, nil
+  if base then
+    local found, more = require("code-tour.ast.changes").review(idx, base, entries, #overrides > 0)
+    if not found then
+      return nil, more
+    end
+    entries, review_warnings = found, more
+  end
   local current_entries, current_through, ops, missing = entries, through, overrides, {}
   if request.recipe then
     current_entries, current_through, ops, missing = reopen(idx, saved, entries, through, overrides, request.cwd)
@@ -142,6 +153,7 @@ function M.new(request)
     return nil, #missing > 0 and (table.concat(missing, ", ") .. " (" .. err .. ")") or err
   end
   vim.list_extend(prep.warnings, missing)
+  vim.list_extend(prep.warnings, review_warnings or {})
   local recipe_entries = request.recipe and vim.deepcopy(saved.entries or {}) or vim.tbl_filter(function(id)
     return not (prep.rt.agent_bodies and prep.rt.agent_bodies[id])
   end, prep.entries)
@@ -158,7 +170,8 @@ function M.new(request)
     detail = detail,
     recipe = { id = saved.id, entries = recipe_entries, detail = detail, symbols = vim.deepcopy(saved.symbols or {}),
       through = vim.deepcopy(saved.through or prep.through or {}), overrides = recipe_overrides, auto = auto or nil },
-    store = request.store or require("code-tour.ast.store").new(idx, ast.options),
+    store = request.store or (base and notes.new()) or require("code-tour.ast.store").new(idx, ast.options),
+    review_base = base or request.review_base,
     ids = {}, -- symbol -> "nK", stable for the tour's lifetime
     next_n = 0,
     snippets = {}, -- "nK" -> snippet (tour snippets and expanded ones)
@@ -600,6 +613,14 @@ function L:fill_command(cli, servername, token, n)
     vim.fn.shellescape(servername), token, self.detail)
 end
 
+-- What a writer is told when the tour reviews a diff, else nil.
+function L:review_instruction()
+  if self.review_base then
+    return ("review against %s: explain what each box changed and why it matters (`git diff %s -- FILE`)")
+      :format(self.review_base, self.review_base)
+  end
+end
+
 -- The outline (§9.2) with real statuses. ctx: { token, cli, servername }.
 function L:outline(ctx)
   local all = self:all()
@@ -608,8 +629,9 @@ function L:outline(ctx)
   local header = ("tour %s · %s · %d snippets · %d to write · %d gap%s · fill: %s"):format(ctx.token, self.detail,
     #all, writing, gaps, gaps == 1 and "" or "s", self:fill_command(ctx.cli, ctx.servername, ctx.token))
   local view = { detail = self.detail, snippets = all, gaps = self.tour.gaps, warnings = self.tour.warnings }
+  local review = self:review_instruction()
   return outline.text(view, {
-    header = header,
+    header = review and (header .. "\n" .. review) or header,
     ctx = ctx,
     status = function(sn)
       return self:write_status(sn)
@@ -619,7 +641,7 @@ end
 
 -- The outline lines of some snippets only (requests carry only what they concern, §9.5).
 function L:snippet_outline(list)
-  local out = {}
+  local out = { self:review_instruction() }
   for _, sn in ipairs(list) do
     vim.list_extend(out, outline.snippet_lines(sn, function(x)
       return self:write_status(x)

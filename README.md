@@ -5,7 +5,7 @@ Interactive code tours in Neovim, written by Claude or Codex. The agent picks th
 - Dim highlights mark every prepared snippet. The focused one gets a stronger highlight and an explanation box above it.
 - `<leader>aj` / `ak` walk the route, following the calls that matter. Calls you can skip are marked, and you can open them with `<leader>ad`.
 - `<leader>ar` asks about a box. `<leader>ae` explains any selected code. Replies land in the tour.
-- Review mode shows a git diff with its explanation. Saved tours are revalidated against your current code.
+- Review mode shows a git diff with its explanation; `code-tour ast --review` tours the changed functions. Saved tours are revalidated against your current code.
 
 ## Requirements
 

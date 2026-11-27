@@ -725,6 +725,8 @@ def ast_main(argv):
     parser.add_argument('--auto', action='store_true', help='Choose entries from project structure')
     parser.add_argument('--stale', action='store_true', help='Entries are the symbols whose stored explanations are stale (see `analyze kb`), callee first; fresh notes are reused')
     parser.add_argument('--limit', type=int, default=10, help='--stale: at most this many entries')
+    parser.add_argument('--review', action='store_true', help='Review the diff: show it in the tour; without entries, tour the changed symbols')
+    parser.add_argument('--base', help='--review: the Git revision to compare with (default: HEAD)')
     override_arguments(parser)
     parser.add_argument('--through', action='append', default=[], help='A symbol the main flow must pass through (repeatable)')
     parser.add_argument('--detail', choices=('overview', 'normal', 'detailed', 'exhaustive'))
@@ -737,8 +739,12 @@ def ast_main(argv):
     parser.add_argument('--origin-session')
     parser.add_argument('--origin-pane')
     args = parser.parse_args(argv)
-    if not args.entries and not args.auto and not args.stale and not any(item['kind'] == 'add' for item in args.overrides or []):
-        parser.error('pass an entry symbol, --stale or --auto')
+    if args.base and not args.review:
+        parser.error('--base needs --review')
+    if args.review and (args.auto or args.stale):
+        parser.error('--review chooses its own entries; drop --auto and --stale')
+    if not args.entries and not args.auto and not args.stale and not args.review and not any(item['kind'] == 'add' for item in args.overrides or []):
+        parser.error('pass an entry symbol, --review, --stale or --auto')
     root = (args.project or Path.cwd()).resolve()
     if not args.project and not os.environ.get('CODE_TOUR_CONFIG'):
         git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
@@ -763,6 +769,8 @@ def ast_main(argv):
     request = dict(entries=args.entries, root=str(root), through=args.through, cwd=os.getcwd())
     if args.auto:
         request['auto'] = True
+    if args.review:
+        request.update(review=True, base=args.base or 'HEAD')
     if args.overrides:
         request['overrides'] = args.overrides
     if args.detail:

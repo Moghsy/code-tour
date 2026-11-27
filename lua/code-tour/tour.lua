@@ -1231,7 +1231,11 @@ end
 local function ast_review(data)
   if s.review then
     for _, stop in ipairs(data) do
-      if not stop.lazy then require("code-tour.review").prepare(stop, s.root, s.base) end
+      if not stop.lazy then
+        -- a jump can reach a file with no repository: it is shown without a diff
+        local ok, err = pcall(require("code-tour.review").prepare, stop, s.root, s.base)
+        if not ok then notify("No diff for " .. stop.path .. ": " .. tostring(err)) end
+      end
     end
   end
   return data
@@ -1356,8 +1360,12 @@ local function ast_present(request, live, err)
   local result = M.show(live:stops(), { root = live.root, origin = request.origin, cli = request.cli,
     standalone = request.standalone })
   s.ast = live
+  if live.review_base then
+    s.review, s.base = true, live.review_base
+    ast_review(s.stops)
+  end
   ast_examples(live, s.stops)
-  live:remember()
+  if not live.review_base then live:remember() end
   ast_refresh()
   render(false)
   local ctx = ast_ctx()
@@ -1654,7 +1662,7 @@ function M.ast_adjust(ops)
   recipe.overrides = vim.list_extend(recipe.overrides or {}, normalized)
   recipe.detail = ops.detail or live.detail
   local request = { root = live.root, recipe = recipe, store = live.store, cache_dir = live.idx.cache_dir,
-    cwd = ops.cwd }
+    cwd = ops.cwd, review_base = live.review_base }
   local rebuilt, reason = require("code-tour.ast.live").new(request)
   assert(rebuilt, reason)
   require("code-tour.ast.deadline").finish()

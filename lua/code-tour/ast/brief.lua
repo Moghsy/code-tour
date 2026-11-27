@@ -65,6 +65,7 @@ function M.build(live, id, ctx)
       end
     end
   end
+  add(live:review_instruction())
   add("Source with box boundaries:")
   local boundaries = {}
   local function mark(line, value)

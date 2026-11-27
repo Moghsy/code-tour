@@ -534,9 +534,12 @@ code-tour ast 'OrderService#checkout' --detail normal
 code-tour ast 'OrderService#checkout' --through 'DiscountPolicy#apply'
 code-tour ast src/main/java/shop/app/Main.java:9
 code-tour ast --auto
+code-tour ast --review --base main
 ```
 
 The editor builds the tour and shows the whole skeleton immediately: boxes with fresh notes in the store (§11.2) are complete at once, and every other box reads "Being written…". It returns the outline, which marks what still needs writing. If the entry has no backend or parser, or the selected symbol has a parse error, the result is `{"fallback": true, "reason": "…"}` and the agent authors the tour as described in SPEC-old.md.
+
+`--review [--base REF]` (default `HEAD`) builds a diff review: the editor shows added and removed lines on every box. Without entries, the entries are the innermost methods, constructors and functions holding a changed line, comparing the base with what the editor shows (unsaved and untracked files included). Changes outside any of them (fields, imports, files without a backend, deleted files) are printed as `changed outside any symbol` warnings, to be added with `--add` or a jump. With no changed symbol at all the result is a fallback. The outline and the briefs tell the writer to explain the change. Review notes live in memory: the store neither supplies nor receives them, and no tour recipe is remembered.
 
 ### 9.2 The outline
 
@@ -850,7 +853,7 @@ Members generated at build time (Lombok `@Builder`, `@Getter`, `@Setter`, `@Data
 
 | CLI | RPC | Does |
 | --- | --- | --- |
-| `code-tour ast ENTRY… [--route FILE] [--walk/--branch EDGE…] [--through SYMBOL…] [--detail D] [--auto] [--force] [--json] [--dry-run] [--rate/--split/--merge/--edge/--add …]` | `ast_tour(request)` | build, show the skeleton, return the outline |
+| `code-tour ast ENTRY… [--route FILE] [--walk/--branch EDGE…] [--through SYMBOL…] [--detail D] [--auto] [--review [--base REF]] [--force] [--json] [--dry-run] [--rate/--split/--merge/--edge/--add …]` | `ast_tour(request)` | build, show the skeleton, return the outline |
 | `code-tour --fill N --tour T [--detail D] [--model M]` | `fill(id, payload, opts)` | for AST snippets, attach notes (§9.3) and write them to the store |
 | `code-tour brief N --tour T` | `ast_brief(id, tour)` | one snippet's brief for a subagent (§9.7) |
 | `code-tour adjust --tour T [--detail D] …` | `ast_adjust(ops)` | change detail, or apply overrides, on a live tour |

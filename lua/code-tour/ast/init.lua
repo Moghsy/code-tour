@@ -316,6 +316,7 @@ function M.fallback_reason(err, idx)
   if err:find("no parser", 1, true) or err:find("no backend", 1, true) or err:find("parse error", 1, true) then
     return with_languages(err)
   end
+  if err:match("^no changed symbol") then return with_languages(err) end
   if not (err:match("^no type") or err:match("^no method") or err:match("^no symbol")) then return end
   local missing, usable
   for _, language in ipairs(M.options.languages) do
@@ -343,7 +344,7 @@ function M.fallback_reason(err, idx)
 end
 
 -- §9.1 dry run: build the tour for entries and return its outline without opening it.
--- opts: { root?, cache_dir?, detail?, through = {specs}, json? }
+-- opts: { root?, cache_dir?, detail?, through = {specs}, json?, review?, base? }
 --   -> { outline = text, tour = data } or error
 function M.outline(entries, opts)
   opts = opts or {}
@@ -358,6 +359,17 @@ function M.outline(entries, opts)
     return { root = idx.root, auto = true, candidates = require("code-tour.ast.outline").auto_entries(idx), truncated = idx.truncated or nil }
   end
   local outline = require("code-tour.ast.outline")
+  local warnings
+  if opts.review then
+    local found, more = require("code-tour.ast.changes").review(idx, opts.base or "HEAD", entries,
+      opts.overrides and #opts.overrides > 0)
+    if not found then
+      local reason = M.fallback_reason(more, idx)
+      if reason then return { fallback = true, reason = reason, root = idx.root } end
+      error(more, 0)
+    end
+    entries, warnings = found, more
+  end
   local tour, err = outline.build(idx, entries, {
     detail = opts.detail or M.options.detail,
     through = opts.through,
@@ -373,6 +385,7 @@ function M.outline(entries, opts)
     if reason then return { fallback = true, reason = reason, root = idx.root } end
     error(err, 0)
   end
+  vim.list_extend(tour.warnings, warnings or {})
   return { outline = outline.text(tour), tour = outline.data(tour), root = idx.root }
 end
 

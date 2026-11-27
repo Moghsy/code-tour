@@ -866,6 +866,22 @@ class AstTourTests(unittest.TestCase):
                             '--pane', self.address, '--branch', 'OrderService#checkout -> Order#markPaid@9')
         self.assertIn('s11 order.markPaid [9 ', proc.stdout)
 
+    def test_review_tours_the_changed_symbols(self):
+        source = self.root / 'src/main/java/shop/order/OrderService.java'
+        original = source.read_text()
+        git = ['git', '-C', str(self.root), '-c', 'user.name=t', '-c', 'user.email=t@example.invalid']
+        subprocess.run([*git, 'commit', '-qam', 'base', '--allow-empty'], check=True)
+        lines = original.splitlines(keepends=True)
+        start = next(i for i, line in enumerate(lines) if 'checkout(' in line)
+        lines.insert(start + 1, '        int reviewed = 1;\n')
+        source.write_text(''.join(lines))
+        self.addCleanup(source.write_text, original)
+        proc = self.run_cli('ast', '--review', '--pane', self.address, '--force')
+        self.assertIn('review against HEAD', proc.stdout)
+        self.assertIn('OrderService.checkout(Order)', proc.stdout)
+        self.assertTrue(cli.rpc(self.address, 'return require("tour").state().review'))
+        self.run_cli('ast', '--base', 'HEAD', '--pane', self.address, expected=2)
+
     def test_second_ast_is_refused_without_force(self):
         _, token = self.start()
         proc = self.run_cli('ast', 'OrderService#checkout', '--pane', self.address, expected=1)

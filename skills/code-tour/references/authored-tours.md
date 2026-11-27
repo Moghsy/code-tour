@@ -1,6 +1,6 @@
 # Agent-authored tours
 
-Use this workflow when the AST command reports a fallback, when the reader requests a diff review, or when composing a tour from specific source ranges.
+Use this workflow when the AST command (including `ast --review` for a diff review) reports a fallback, or when composing a tour from specific source ranges.
 
 ## Author a tour
 
